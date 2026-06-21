@@ -30,29 +30,62 @@ import { useChatWorkspaceStore } from "@/lib/chat-store";
 import type { AiParticipant, ChatMode } from "@/lib/chat-types";
 
 const describeAiChoices = (ais: AiParticipant[]) =>
-  ais.map((ai, index) => `${index + 1}. ${ai.name}（${ai.role}）`).join("\n");
+  ais.map((ai) => `${ai.name}（${ai.role}）`).join("\n");
 
-const parseAiSelection = (input: string, ais: AiParticipant[], mode: ChatMode) => {
-  const normalized = input.trim();
-  if (!normalized) return mode === "dialog" ? ais.slice(0, 1) : ais;
-
-  const tokens = normalized
-    .split(/[，,、\s]+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
-  const selected = tokens
-    .map((token) => {
-      const index = Number(token);
-      if (Number.isInteger(index) && index >= 1) return ais[index - 1];
-      return ais.find((ai) => ai.name === token || ai.id === token);
-    })
-    .filter((ai): ai is AiParticipant => Boolean(ai));
-
-  const unique = Array.from(new Map(selected.map((ai) => [ai.id, ai])).values());
-  return mode === "dialog" ? unique.slice(0, 1) : unique;
+const getFormText = (values: Record<string, string | string[]>, name: string) => {
+  const value = values[name];
+  return typeof value === "string" ? value : "";
 };
 
-export function TopicWorkspaceSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+const getFormArray = (values: Record<string, string | string[]>, name: string) => {
+  const value = values[name];
+  return Array.isArray(value) ? value : [];
+};
+
+type WorkspaceModalApi = {
+  alert: (options: { title: string; description?: string }) => Promise<void>;
+  confirm: (options: {
+    title: string;
+    description?: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    destructive?: boolean;
+  }) => Promise<boolean>;
+  prompt: (options: {
+    title: string;
+    description?: string;
+    defaultValue?: string;
+    placeholder?: string;
+    multiline?: boolean;
+  }) => Promise<string | null>;
+  form: (options: {
+    title: string;
+    description?: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    fields: Array<{
+      name: string;
+      label: string;
+      defaultValue?: string;
+      defaultValues?: string[];
+      placeholder?: string;
+      multiline?: boolean;
+      type?: "text" | "choice";
+      choiceMode?: "single" | "multiple";
+      options?: Array<{
+        value: string;
+        label: string;
+        description?: string;
+      }>;
+    }>;
+  }) => Promise<Record<string, string | string[]> | null>;
+};
+
+type TopicWorkspaceSidebarProps = React.ComponentProps<typeof Sidebar> & {
+  modal: WorkspaceModalApi;
+};
+
+export function TopicWorkspaceSidebar({ modal, ...props }: TopicWorkspaceSidebarProps) {
   const topics = useChatWorkspaceStore((state) => state.topics);
   const ais = useChatWorkspaceStore((state) => state.ais);
   const chats = useChatWorkspaceStore((state) => state.chats);
@@ -80,88 +113,139 @@ export function TopicWorkspaceSidebar({ ...props }: React.ComponentProps<typeof 
     .filter(Boolean)
     .sort((a, b) => b.updatedAt - a.updatedAt);
 
-  const addTopic = () => {
-    const title = window.prompt("主题名称", "新主题");
+  const addTopic = async () => {
+    const title = await modal.prompt({ title: "主题名称", defaultValue: "新主题" });
     if (title !== null) createTopic(title);
   };
 
-  const editTopic = (topicId: string, currentTitle: string) => {
-    const title = window.prompt("重命名主题", currentTitle);
+  const editTopic = async (topicId: string, currentTitle: string) => {
+    const title = await modal.prompt({
+      title: "重命名主题",
+      defaultValue: currentTitle,
+    });
     if (title !== null) renameTopic(topicId, title);
   };
 
-  const removeTopic = (topicId: string, title: string) => {
-    if (window.confirm(`删除主题「${title}」及其全部 AI、会话？`)) {
+  const removeTopic = async (topicId: string, title: string) => {
+    const confirmed = await modal.confirm({
+      title: `删除主题「${title}」？`,
+      description: "此操作会同时删除该主题下的全部 AI 和会话。",
+      confirmLabel: "删除",
+      destructive: true,
+    });
+    if (confirmed) {
       deleteTopic(topicId);
     }
   };
 
-  const addAi = () => {
+  const addAi = async () => {
     if (!activeTopic) return;
-    const name = window.prompt("AI 名称", "新角色");
-    if (name === null) return;
-    const role = window.prompt("角色人设", "待设定的人设");
-    if (role === null) return;
-    const systemPrompt = window.prompt(
-      "角色提示词",
-      "按照人设进行语C互动，保持角色口吻，主动回应玩家。",
-    );
-    if (systemPrompt === null) return;
-    createAi(activeTopic.id, { name, role, systemPrompt });
+    const values = await modal.form({
+      title: "创建 AI",
+      fields: [
+        { name: "name", label: "AI 名称", defaultValue: "新角色" },
+        { name: "role", label: "角色人设", defaultValue: "待设定的人设" },
+        {
+          name: "systemPrompt",
+          label: "角色提示词",
+          defaultValue: "按照人设进行语C互动，保持角色口吻，主动回应玩家。",
+          multiline: true,
+        },
+      ],
+    });
+    if (!values) return;
+    createAi(activeTopic.id, {
+      name: getFormText(values, "name"),
+      role: getFormText(values, "role"),
+      systemPrompt: getFormText(values, "systemPrompt"),
+    });
   };
 
-  const editAi = (ai: AiParticipant) => {
-    const name = window.prompt("AI 名称", ai.name);
-    if (name === null) return;
-    const role = window.prompt("角色人设", ai.role);
-    if (role === null) return;
-    const systemPrompt = window.prompt("角色提示词", ai.systemPrompt);
-    if (systemPrompt === null) return;
-    updateAi(ai.id, { name, role, systemPrompt });
+  const editAi = async (ai: AiParticipant) => {
+    const values = await modal.form({
+      title: `编辑 AI「${ai.name}」`,
+      fields: [
+        { name: "name", label: "AI 名称", defaultValue: ai.name },
+        { name: "role", label: "角色人设", defaultValue: ai.role },
+        {
+          name: "systemPrompt",
+          label: "角色提示词",
+          defaultValue: ai.systemPrompt,
+          multiline: true,
+        },
+      ],
+    });
+    if (!values) return;
+    updateAi(ai.id, {
+      name: getFormText(values, "name"),
+      role: getFormText(values, "role"),
+      systemPrompt: getFormText(values, "systemPrompt"),
+    });
   };
 
-  const removeAi = (ai: AiParticipant) => {
-    if (window.confirm(`删除 AI「${ai.name}」？已有会话会保留创建时的人设快照。`)) {
+  const removeAi = async (ai: AiParticipant) => {
+    const confirmed = await modal.confirm({
+      title: `删除 AI「${ai.name}」？`,
+      description: "已有会话会保留创建时的人设快照。",
+      confirmLabel: "删除",
+      destructive: true,
+    });
+    if (confirmed) {
       deleteAi(ai.id);
     }
   };
 
-  const addChat = (mode: ChatMode) => {
+  const addChat = async (mode: ChatMode) => {
     if (!activeTopic || aiList.length === 0) return;
-    const selection = window.prompt(
-      mode === "group"
-        ? "选择群聊 AI（输入序号或名称，逗号分隔）"
-        : "选择单聊 AI（输入序号或名称）",
-      mode === "group" ? aiList.map((_, index) => index + 1).join(",") : "1",
-    );
-    if (selection === null) return;
-    const selectedAis = parseAiSelection(selection, aiList, mode);
-    if (selectedAis.length === 0) {
-      window.alert("没有匹配到 AI。\n" + describeAiChoices(aiList));
+    const values = await modal.form({
+      title: mode === "group" ? "创建群聊" : "创建单聊",
+      fields: [
+        {
+          name: "participantIds",
+          label: mode === "group" ? "选择群聊 AI" : "选择单聊 AI",
+          type: "choice",
+          choiceMode: mode === "group" ? "multiple" : "single",
+          defaultValues: mode === "group" ? aiList.map((ai) => ai.id) : [aiList[0]!.id],
+          options: aiList.map((ai) => ({
+            value: ai.id,
+            label: ai.name,
+            description: ai.role,
+          })),
+        },
+        {
+          name: "title",
+          label: "会话名称",
+          placeholder: "留空自动生成",
+        },
+      ],
+    });
+    if (!values) return;
+    const participantIds = getFormArray(values, "participantIds");
+    if (participantIds.length === 0) {
+      await modal.alert({
+        title: "请选择 AI",
+        description: describeAiChoices(aiList),
+      });
       return;
     }
-    const fallback =
-      mode === "group"
-        ? `${selectedAis.map((ai) => ai.name).join("、")} 群聊`
-        : `与 ${selectedAis[0]!.name} 对话`;
-    const title = window.prompt("会话名称", fallback);
-    if (title !== null) {
-      createChat(
-        activeTopic.id,
-        mode,
-        title,
-        selectedAis.map((ai) => ai.id),
-      );
-    }
+    createChat(activeTopic.id, mode, getFormText(values, "title"), participantIds);
   };
 
-  const editChat = (chatId: string, currentTitle: string) => {
-    const title = window.prompt("重命名会话", currentTitle);
+  const editChat = async (chatId: string, currentTitle: string) => {
+    const title = await modal.prompt({
+      title: "重命名会话",
+      defaultValue: currentTitle,
+    });
     if (title !== null) renameChat(chatId, title);
   };
 
-  const removeChat = (chatId: string, title: string) => {
-    if (window.confirm(`删除会话「${title}」？`)) {
+  const removeChat = async (chatId: string, title: string) => {
+    const confirmed = await modal.confirm({
+      title: `删除会话「${title}」？`,
+      confirmLabel: "删除",
+      destructive: true,
+    });
+    if (confirmed) {
       deleteChat(chatId);
     }
   };
