@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import type {
   MessageFormatAdapter,
@@ -33,6 +33,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
+import type { ProviderModel } from "@/lib/ai-providers";
 import type { StoredMessageRow, TopicContext } from "@/lib/chat-types";
 
 type StorageContent = Record<string, unknown>;
@@ -65,10 +66,11 @@ type ModalField = {
   defaultValue?: string;
   placeholder?: string;
   multiline?: boolean;
-  type?: "text" | "choice";
+  type?: "text" | "choice" | "model";
   choiceMode?: "single" | "multiple";
   options?: ModalChoiceOption[];
   defaultValues?: string[];
+  modelNameField?: string;
 };
 
 type FormOptions = ModalBaseOptions & {
@@ -108,7 +110,9 @@ const getInitialFormValues = (fields: ModalField[]) =>
   Object.fromEntries(
     fields.map((field) => [
       field.name,
-      field.type === "choice" ? (field.defaultValues ?? []) : (field.defaultValue ?? ""),
+      field.type === "choice" || field.type === "model"
+        ? (field.defaultValues ?? [])
+        : (field.defaultValue ?? ""),
     ]),
   );
 
@@ -203,6 +207,9 @@ function WorkspaceModal({
   close: () => void;
   submit: () => void;
 }) {
+  const [modelQuery, setModelQuery] = useState("");
+  const [models, setModels] = useState<ProviderModel[]>([]);
+  const [modelsStatus, setModelsStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const isPrompt = request?.kind === "prompt";
   const isForm = request?.kind === "form";
   const isAlert = request?.kind === "alert";
@@ -221,14 +228,114 @@ function WorkspaceModal({
       ? request.fields
       : [];
 
+  const hasModelField = fields.some((field) => field.type === "model");
+
+  const loadModels = useCallback(async () => {
+    setModelsStatus("loading");
+    try {
+      const response = await fetch("/api/providers/openrouter/models");
+      if (!response.ok) throw new Error(`Failed to load models: ${response.status}`);
+      const payload = (await response.json()) as { models?: ProviderModel[] };
+      setModels(payload.models ?? []);
+      setModelsStatus("loaded");
+    } catch {
+      setModelsStatus("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    setModelQuery("");
+  }, [request]);
+
+  useEffect(() => {
+    if (hasModelField && modelsStatus === "idle") {
+      void loadModels();
+    }
+  }, [hasModelField, loadModels, modelsStatus]);
+
   const renderField = (field: ModalField, index: number) => {
     const id = `workspace-modal-${field.name}`;
     const labelId = `${id}-label`;
     const rawValue = values[field.name];
     const textValue = typeof rawValue === "string" ? rawValue : "";
     const choiceValues = Array.isArray(rawValue) ? rawValue : [];
+    const modelOptions = models.filter((model) => {
+      const query = modelQuery.trim().toLowerCase();
+      if (!query) return true;
+      return (
+        model.id.toLowerCase().includes(query) ||
+        model.name.toLowerCase().includes(query) ||
+        model.description?.toLowerCase().includes(query)
+      );
+    });
     const input =
-      field.type === "choice" ? (
+      field.type === "model" ? (
+        <div className="grid gap-2">
+          <Input
+            placeholder="搜索 OpenRouter 模型..."
+            value={modelQuery}
+            onChange={(event) => setModelQuery(event.target.value)}
+          />
+          <div
+            id={id}
+            className="grid max-h-64 gap-2 overflow-y-auto pr-1"
+            role="radiogroup"
+            aria-labelledby={field.label ? labelId : undefined}
+          >
+            {modelsStatus === "loading" ? (
+              <div className="text-muted-foreground rounded-md border px-3 py-2 text-sm">
+                正在加载模型...
+              </div>
+            ) : modelsStatus === "error" ? (
+              <div className="grid gap-2 rounded-md border px-3 py-2">
+                <div className="text-sm font-medium">模型列表加载失败</div>
+                <Button type="button" variant="outline" size="sm" onClick={loadModels}>
+                  重试
+                </Button>
+              </div>
+            ) : modelOptions.length === 0 ? (
+              <div className="text-muted-foreground rounded-md border px-3 py-2 text-sm">
+                没有匹配的模型
+              </div>
+            ) : (
+              modelOptions.slice(0, 80).map((model) => {
+                const selected = choiceValues.includes(model.id);
+                return (
+                  <label
+                    key={model.id}
+                    className="border-input hover:bg-accent/50 has-[:checked]:border-primary has-[:checked]:bg-accent flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2 transition-colors"
+                  >
+                    <input
+                      type="radio"
+                      name={field.name}
+                      className="mt-1"
+                      checked={selected}
+                      onChange={() => {
+                        setFieldValue(field.name, [model.id]);
+                        setFieldValue(field.modelNameField ?? `${field.name}Name`, model.name);
+                      }}
+                    />
+                    <span className="grid min-w-0 gap-0.5">
+                      <span className="truncate text-sm font-medium">{model.name}</span>
+                      <span className="text-muted-foreground truncate text-xs">{model.id}</span>
+                      {model.contextLength ? (
+                        <span className="text-muted-foreground text-xs">
+                          上下文 {model.contextLength.toLocaleString()} tokens
+                        </span>
+                      ) : null}
+                      {model.description ? (
+                        <span className="text-muted-foreground line-clamp-2 text-xs">
+                          {model.description}
+                        </span>
+                      ) : null}
+                    </span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      ) : field.type === "choice" ? (
         <div
           id={id}
           className="grid gap-2"

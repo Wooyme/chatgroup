@@ -1,77 +1,175 @@
 import { frontendTools } from "@assistant-ui/react-ai-sdk";
-import { convertToModelMessages, type JSONSchema7, streamText, type UIMessage } from "ai";
+import {
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  type JSONSchema7,
+  type ModelMessage,
+  streamText,
+  type UIMessage,
+} from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import type { TopicContext } from "@/lib/chat-types";
+import { DEFAULT_OPENROUTER_MODEL_ID } from "@/lib/ai-providers";
+import type { AiParticipant, TopicContext } from "@/lib/chat-types";
 
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
-const buildSystemPrompt = (
+const getParticipantModelId = (participant: AiParticipant | undefined) =>
+  participant?.modelId?.trim() || DEFAULT_OPENROUTER_MODEL_ID;
+
+const buildTopicHeader = (topicContext: TopicContext | undefined) => {
+  if (!topicContext) return "";
+  const topicDescription = topicContext.topic.description.trim();
+  return [
+    `当前主题：${topicContext.topic.title}`,
+    topicDescription ? `主题说明：${topicDescription}` : undefined,
+    `当前会话：${topicContext.chat.title}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+const buildDialogSystemPrompt = (
   baseSystem: string | undefined,
   topicContext: TopicContext | undefined,
 ) => {
-  const parts = [baseSystem?.trim()].filter(Boolean) as string[];
-  if (!topicContext) return parts.join("\n\n") || undefined;
+  const parts = [baseSystem?.trim(), buildTopicHeader(topicContext)].filter(Boolean) as string[];
+  const participant = topicContext?.chat.participants[0];
 
-  const topicDescription = topicContext.topic.description.trim();
+  if (participant) {
+    parts.push(
+      [
+        `你正在与玩家进行一对一语C互动。你必须扮演：${participant.name}。`,
+        `角色定位：${participant.role}`,
+        `角色提示词：${participant.systemPrompt}`,
+        "回复要求：",
+        "- 始终保持该角色的口吻、视角和情绪一致性。",
+        "- 直接回应玩家，不要跳出角色解释系统设定。",
+        "- 可以主动推进互动，但不要替玩家做决定或代替玩家发言。",
+      ].join("\n"),
+    );
+  } else if (topicContext) {
+    parts.push("你是该主题下的 AI 助手。结合主题背景回答，保持直接、具体、可执行。");
+  }
+
+  return parts.join("\n\n") || undefined;
+};
+
+const buildGroupSystemPrompt = (
+  baseSystem: string | undefined,
+  topicContext: TopicContext,
+  participant: AiParticipant,
+  priorReplies: string[],
+) => {
+  const roster = topicContext.chat.participants
+    .map((ai, index) => `${index + 1}. ${ai.name}（${ai.role}）：${ai.systemPrompt}`)
+    .join("\n");
+  const parts = [baseSystem?.trim(), buildTopicHeader(topicContext)].filter(Boolean) as string[];
+
   parts.push(
     [
-      `当前主题：${topicContext.topic.title}`,
-      topicDescription ? `主题说明：${topicDescription}` : undefined,
-      `当前会话：${topicContext.chat.title}`,
+      "你正在参与一个多 AI 角色群聊，所有角色都与玩家进行语C互动。",
+      "本次只输出你当前角色的一段回复，不要替其他角色发言。",
+      `当前轮到你扮演：${participant.name}。`,
+      `你的角色定位：${participant.role}`,
+      `你的角色提示词：${participant.systemPrompt}`,
+      "群聊角色顺序：",
+      roster,
+      priorReplies.length > 0 ? "本轮前序角色回复：" : undefined,
+      priorReplies.length > 0 ? priorReplies.join("\n\n") : undefined,
+      "输出要求：",
+      `- 必须使用 \`**${participant.name}**\` 开头。`,
+      "- 只回复一段，观点要承接玩家和前序角色。",
+      "- 始终保持你自己的口吻、视角和情绪一致性。",
+      "- 不要解释你在模拟群聊，不要替玩家发言。",
     ]
       .filter(Boolean)
       .join("\n"),
   );
 
-  if (topicContext.chat.mode === "group") {
-    const participants = topicContext.chat.participants
-      .map(
-        (participant, index) =>
-          `${index + 1}. ${participant.name}（${participant.role}）：${participant.systemPrompt}`,
-      )
-      .join("\n");
-
-    parts.push(
-      [
-        "你正在模拟一个多 AI 角色群聊，所有角色都与玩家进行语C互动。",
-        "用户每次发言后，按下列角色顺序依次回复。",
-        participants,
-        "输出要求：",
-        "- 每个角色使用 `**角色名**` 开头。",
-        "- 每个角色只回复一段，观点要互相承接，避免重复。",
-        "- 始终保持每个角色的人设、口吻、视角和情绪一致性。",
-        "- 只输出角色发言，不要解释你在模拟群聊，不要替玩家发言。",
-      ].join("\n"),
-    );
-  } else {
-    const participant = topicContext.chat.participants[0];
-    if (participant) {
-      parts.push(
-        [
-          `你正在与玩家进行一对一语C互动。你必须扮演：${participant.name}。`,
-          `角色定位：${participant.role}`,
-          `角色提示词：${participant.systemPrompt}`,
-          "回复要求：",
-          "- 始终保持该角色的口吻、视角和情绪一致性。",
-          "- 直接回应玩家，不要跳出角色解释系统设定。",
-          "- 可以主动推进互动，但不要替玩家做决定或代替玩家发言。",
-        ].join("\n"),
-      );
-    } else {
-      parts.push("你是该主题下的 AI 助手。结合主题背景回答，保持直接、具体、可执行。");
-    }
-  }
-
   return parts.join("\n\n");
+};
+
+const makeTools = (tools: Record<string, { description?: string; parameters: JSONSchema7 }>) => ({
+  ...frontendTools(tools),
+});
+
+const streamDialog = async ({
+  messages,
+  system,
+  tools,
+  topicContext,
+}: {
+  messages: ModelMessage[];
+  system?: string;
+  tools: Record<string, { description?: string; parameters: JSONSchema7 }>;
+  topicContext?: TopicContext;
+}) => {
+  const participant = topicContext?.chat.participants[0];
+  const result = streamText({
+    model: openrouter.chat(getParticipantModelId(participant)),
+    messages,
+    system: buildDialogSystemPrompt(system, topicContext),
+    tools: makeTools(tools),
+  });
+
+  return result.toUIMessageStreamResponse({
+    sendReasoning: true,
+  });
+};
+
+const streamGroup = ({
+  messages,
+  system,
+  tools,
+  topicContext,
+  originalMessages,
+}: {
+  messages: ModelMessage[];
+  system?: string;
+  tools: Record<string, { description?: string; parameters: JSONSchema7 }>;
+  topicContext: TopicContext;
+  originalMessages: UIMessage[];
+}) => {
+  const stream = createUIMessageStream<UIMessage>({
+    originalMessages,
+    async execute({ writer }) {
+      const priorReplies: string[] = [];
+
+      for (const participant of topicContext.chat.participants) {
+        let reply = "";
+        const result = streamText({
+          model: openrouter.chat(getParticipantModelId(participant)),
+          messages,
+          system: buildGroupSystemPrompt(system, topicContext, participant, priorReplies),
+          tools: makeTools(tools),
+          onChunk({ chunk }) {
+            if (chunk.type === "text-delta") reply += chunk.text;
+          },
+        });
+
+        for await (const chunk of result.toUIMessageStream({
+          sendReasoning: true,
+          sendStart: priorReplies.length === 0,
+          sendFinish: false,
+        })) {
+          writer.write(chunk);
+        }
+        if (reply.trim()) priorReplies.push(reply.trim());
+      }
+    },
+  });
+
+  return createUIMessageStreamResponse({ stream });
 };
 
 export async function POST(req: Request) {
   const {
     messages,
     system,
-    tools,
+    tools = {},
     topicContext,
   }: {
     messages: UIMessage[];
@@ -79,17 +177,22 @@ export async function POST(req: Request) {
     tools?: Record<string, { description?: string; parameters: JSONSchema7 }>;
     topicContext?: TopicContext;
   } = await req.json();
+  const modelMessages = await convertToModelMessages(messages);
 
-  const result = streamText({
-    model: openrouter.chat("x-ai/grok-4.3"),
-    messages: await convertToModelMessages(messages),
-    system: buildSystemPrompt(system, topicContext),
-    tools: {
-      ...frontendTools(tools ?? {}),
-    },
-  });
+  if (topicContext?.chat.mode === "group" && topicContext.chat.participants.length > 0) {
+    return streamGroup({
+      messages: modelMessages,
+      system,
+      tools,
+      topicContext,
+      originalMessages: messages,
+    });
+  }
 
-  return result.toUIMessageStreamResponse({
-    sendReasoning: true,
+  return streamDialog({
+    messages: modelMessages,
+    system,
+    tools,
+    topicContext,
   });
 }

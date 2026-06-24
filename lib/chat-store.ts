@@ -10,6 +10,11 @@ import {
   type StoredMessageRow,
   type Topic,
 } from "@/lib/chat-types";
+import {
+  DEFAULT_AI_PROVIDER,
+  DEFAULT_OPENROUTER_MODEL_ID,
+  DEFAULT_OPENROUTER_MODEL_NAME,
+} from "@/lib/ai-providers";
 
 type WorkspaceState = {
   topics: Record<string, Topic>;
@@ -23,11 +28,13 @@ type WorkspaceState = {
   deleteTopic: (topicId: string) => void;
   createAi: (
     topicId: string,
-    input?: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt">>,
+    input?: Partial<
+      Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">
+    >,
   ) => string;
   updateAi: (
     aiId: string,
-    input: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt">>,
+    input: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">>,
   ) => void;
   deleteAi: (aiId: string) => void;
   createChat: (
@@ -68,7 +75,7 @@ const cloneDefaultAis = () => {
 };
 
 const createAiParticipant = (
-  input?: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt">>,
+  input?: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">>,
   index = 0,
 ): AiParticipant => ({
   id: makeId("ai"),
@@ -76,7 +83,45 @@ const createAiParticipant = (
   role: input?.role?.trim() || "待设定的人设",
   systemPrompt: input?.systemPrompt?.trim() || "按照人设进行语C互动，保持角色口吻，主动回应玩家。",
   color: AI_COLORS[index % AI_COLORS.length]!,
+  provider: DEFAULT_AI_PROVIDER,
+  modelId: input?.modelId?.trim() || DEFAULT_OPENROUTER_MODEL_ID,
+  modelName:
+    input?.modelName?.trim() ||
+    (input?.modelId?.trim() === DEFAULT_OPENROUTER_MODEL_ID
+      ? DEFAULT_OPENROUTER_MODEL_NAME
+      : undefined),
 });
+
+const withDefaultModel = (ai: AiParticipant): AiParticipant => ({
+  ...ai,
+  provider: ai.provider ?? DEFAULT_AI_PROVIDER,
+  modelId: ai.modelId?.trim() || DEFAULT_OPENROUTER_MODEL_ID,
+  modelName:
+    ai.modelName?.trim() ||
+    (ai.modelId?.trim() === DEFAULT_OPENROUTER_MODEL_ID
+      ? DEFAULT_OPENROUTER_MODEL_NAME
+      : undefined),
+});
+
+const migrateAiModels = (state: Partial<WorkspaceState>): Partial<WorkspaceState> => {
+  const ais = state.ais
+    ? Object.fromEntries(
+        Object.entries(state.ais).map(([aiId, ai]) => [aiId, withDefaultModel(ai)]),
+      )
+    : state.ais;
+  const chats = state.chats
+    ? Object.fromEntries(
+        Object.entries(state.chats).map(([chatId, chat]) => [
+          chatId,
+          {
+            ...chat,
+            participants: chat.participants.map(withDefaultModel),
+          },
+        ]),
+      )
+    : state.chats;
+  return { ...state, ais, chats };
+};
 
 const createChatSession = (
   topicId: string,
@@ -256,6 +301,11 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             ...(input.systemPrompt?.trim() && {
               systemPrompt: input.systemPrompt.trim(),
             }),
+            ...(input.modelId?.trim() && {
+              provider: DEFAULT_AI_PROVIDER,
+              modelId: input.modelId.trim(),
+              modelName: input.modelName?.trim() || input.modelId.trim(),
+            }),
           };
           return { ais: { ...state.ais, [aiId]: nextAi } };
         });
@@ -397,10 +447,10 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: "simple-simulator-chat-workspace",
-      version: 2,
+      version: 3,
       migrate: (persisted) => {
         const state = persisted as Partial<WorkspaceState>;
-        if (state.ais) return state;
+        if (state.ais) return migrateAiModels(state);
         return createInitialState();
       },
     },

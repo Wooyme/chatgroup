@@ -27,6 +27,11 @@ import {
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
+import {
+  DEFAULT_OPENROUTER_MODEL_ID,
+  DEFAULT_OPENROUTER_MODEL_NAME,
+  getModelDisplayName,
+} from "@/lib/ai-providers";
 import type { AiParticipant, ChatMode } from "@/lib/chat-types";
 
 const describeAiChoices = (ais: AiParticipant[]) =>
@@ -70,8 +75,9 @@ type WorkspaceModalApi = {
       defaultValues?: string[];
       placeholder?: string;
       multiline?: boolean;
-      type?: "text" | "choice";
+      type?: "text" | "choice" | "model";
       choiceMode?: "single" | "multiple";
+      modelNameField?: string;
       options?: Array<{
         value: string;
         label: string;
@@ -151,13 +157,24 @@ export function TopicWorkspaceSidebar({ modal, ...props }: TopicWorkspaceSidebar
           defaultValue: "按照人设进行语C互动，保持角色口吻，主动回应玩家。",
           multiline: true,
         },
+        {
+          name: "modelId",
+          label: "模型",
+          type: "model",
+          choiceMode: "single",
+          defaultValues: [DEFAULT_OPENROUTER_MODEL_ID],
+          modelNameField: "modelName",
+        },
       ],
     });
     if (!values) return;
+    const modelId = getFormArray(values, "modelId")[0] ?? DEFAULT_OPENROUTER_MODEL_ID;
     createAi(activeTopic.id, {
       name: getFormText(values, "name"),
       role: getFormText(values, "role"),
       systemPrompt: getFormText(values, "systemPrompt"),
+      modelId,
+      modelName: getFormText(values, "modelName") || DEFAULT_OPENROUTER_MODEL_NAME,
     });
   };
 
@@ -173,13 +190,24 @@ export function TopicWorkspaceSidebar({ modal, ...props }: TopicWorkspaceSidebar
           defaultValue: ai.systemPrompt,
           multiline: true,
         },
+        {
+          name: "modelId",
+          label: "模型",
+          type: "model",
+          choiceMode: "single",
+          defaultValues: [ai.modelId || DEFAULT_OPENROUTER_MODEL_ID],
+          modelNameField: "modelName",
+        },
       ],
     });
     if (!values) return;
+    const modelId = getFormArray(values, "modelId")[0] ?? ai.modelId ?? DEFAULT_OPENROUTER_MODEL_ID;
     updateAi(ai.id, {
       name: getFormText(values, "name"),
       role: getFormText(values, "role"),
       systemPrompt: getFormText(values, "systemPrompt"),
+      modelId,
+      modelName: getFormText(values, "modelName") || ai.modelName || modelId,
     });
   };
 
@@ -313,11 +341,16 @@ export function TopicWorkspaceSidebar({ modal, ...props }: TopicWorkspaceSidebar
             <SidebarMenu>
               {aiList.map((ai) => (
                 <SidebarMenuItem key={ai.id}>
-                  <SidebarMenuButton tooltip={`${ai.name}：${ai.role}`}>
+                  <SidebarMenuButton
+                    tooltip={`${ai.name}：${ai.role}\n${getModelDisplayName(ai.modelId, ai.modelName)}`}
+                  >
                     <span className={cn("size-2.5 rounded-full", ai.color)} />
                     <span>{ai.name}</span>
-                    <span className="text-muted-foreground ms-auto truncate text-[10px]">
-                      {ai.role}
+                    <span className="text-muted-foreground ms-auto grid min-w-0 justify-items-end text-[10px]">
+                      <span className="max-w-20 truncate">{ai.role}</span>
+                      <span className="max-w-20 truncate">
+                        {getModelDisplayName(ai.modelId, ai.modelName)}
+                      </span>
                     </span>
                   </SidebarMenuButton>
                   <SidebarMenuAction aria-label="编辑 AI" showOnHover onClick={() => editAi(ai)}>

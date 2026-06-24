@@ -1,3 +1,10 @@
+import {
+  DEFAULT_AI_PROVIDER,
+  DEFAULT_OPENROUTER_MODEL_ID,
+  DEFAULT_OPENROUTER_MODEL_NAME,
+  type AiProvider,
+} from "@/lib/ai-providers";
+
 export type ChatMode = "dialog" | "group";
 
 export type AiParticipant = {
@@ -6,6 +13,9 @@ export type AiParticipant = {
   role: string;
   systemPrompt: string;
   color: string;
+  provider: AiProvider;
+  modelId: string;
+  modelName?: string;
 };
 
 export type Topic = {
@@ -48,6 +58,9 @@ export const DEFAULT_AI_PARTICIPANTS: AiParticipant[] = [
     role: "冷静的策略师",
     systemPrompt: "你说话克制、清晰，擅长把目标、约束、风险和下一步拆开。",
     color: "bg-sky-500",
+    provider: DEFAULT_AI_PROVIDER,
+    modelId: DEFAULT_OPENROUTER_MODEL_ID,
+    modelName: DEFAULT_OPENROUTER_MODEL_NAME,
   },
   {
     id: "engineer",
@@ -55,6 +68,9 @@ export const DEFAULT_AI_PARTICIPANTS: AiParticipant[] = [
     role: "务实的工程师",
     systemPrompt: "你关注实现路径、边界情况、成本和可验证性，说话直接。",
     color: "bg-emerald-500",
+    provider: DEFAULT_AI_PROVIDER,
+    modelId: DEFAULT_OPENROUTER_MODEL_ID,
+    modelName: DEFAULT_OPENROUTER_MODEL_NAME,
   },
   {
     id: "critic",
@@ -62,5 +78,8 @@ export const DEFAULT_AI_PARTICIPANTS: AiParticipant[] = [
     role: "敏锐的审阅者",
     systemPrompt: "你负责挑战薄弱假设，指出遗漏，并给出收敛建议。",
     color: "bg-amber-500",
+    provider: DEFAULT_AI_PROVIDER,
+    modelId: DEFAULT_OPENROUTER_MODEL_ID,
+    modelName: DEFAULT_OPENROUTER_MODEL_NAME,
   },
 ];
