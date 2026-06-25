@@ -7,6 +7,7 @@ import type { AiParticipant, ChatSession, NpcCreationSession, Topic } from "@/li
 type NpcFinalResult = {
   name: string;
   role: string;
+  faction: string;
   systemPrompt: string;
   introMessage?: string;
   creationSummary?: string;
@@ -120,6 +121,7 @@ async function runNpcCreationSession(sessionId: string) {
     useChatWorkspaceStore.getState().completeNpcCreationSession(sessionId, {
       name: result.name,
       role: result.role,
+      faction: result.faction,
       systemPrompt: result.systemPrompt,
     });
   } catch (error) {
@@ -159,6 +161,13 @@ function buildRoleplaySummary(topic: Topic) {
   return [
     `主题：${topic.title}`,
     `世界观：${roleplay.worldView}`,
+    `阵营模板：${roleplay.factionSystem.template}`,
+    `群主阵营：${roleplay.playerFaction}`,
+    "阵营列表：",
+    ...roleplay.factionSystem.factions.map(
+      (faction) =>
+        `- ${faction.name}：${faction.description}；强度${faction.strength}；分数${faction.currentScore}/${faction.victoryScore}；胜利条件：${faction.victoryCondition}；叙事影响力：${faction.narrativeInfluence}`,
+    ),
     `群主角色：${roleplay.playerRole}`,
     `群主风评：${roleplay.reputation}`,
     `补充设定：${roleplay.notes || "无"}`,
@@ -172,7 +181,12 @@ function formatNpcCreationHistory(session: NpcCreationSession) {
 function formatOccupiedRoles(chat: ChatSession) {
   if (chat.participants.length === 0) return "暂无。";
   return chat.participants
-    .map((participant) => `- ${participant.name}：${participant.role}`)
+    .map(
+      (participant) =>
+        `- ${participant.name}：${participant.role}${
+          participant.faction ? `；阵营：${participant.faction}` : ""
+        }`,
+    )
     .join("\n");
 }
 
@@ -182,6 +196,7 @@ function buildDmSystemPrompt(topic: Topic) {
     "你说话像 IM 群聊，短、具体、自然，不写长篇说明。",
     "你必须围绕群世界观和群主角色进行把关。",
     "你可以要求更多细节，可以指出世界观冲突，也可以指出角色离群主太远、不方便互动。",
+    "你必须让候选玩家最终选择一个现有阵营，不能自创阵营。",
     "不要说自己是 AI。",
     "群设定：",
     buildRoleplaySummary(topic),
@@ -234,7 +249,7 @@ function buildFinalPrompt(topic: Topic, chat: ChatSession, session: NpcCreationS
     `创建对话记录：\n${formatNpcCreationHistory(session)}`,
     "必须返回严格 JSON，不要 Markdown，不要解释。",
     "JSON 字段：",
-    '{"name":"角色在群里的称呼，2到6个中文字符","role":"一句话角色身份","systemPrompt":"给主群聊天模型使用的人设提示词，必须只扮演最终角色，不暴露现实玩家人设和创建过程","introMessage":"入群第一句 IM 式招呼","creationSummary":"主持人对角色适配性的简短总结"}',
+    '{"name":"角色在群里的称呼，2到6个中文字符","role":"一句话角色身份","faction":"必须是现有阵营名之一","systemPrompt":"给主群聊天模型使用的人设提示词，必须只扮演最终角色，持续体现阵营利益、盟友/敌对关系和胜利目标，不暴露现实玩家人设和创建过程","introMessage":"入群第一句 IM 式招呼","creationSummary":"主持人对角色适配性和阵营归属的简短总结"}',
   ].join("\n\n");
 }
 
@@ -246,6 +261,12 @@ function normalizeNpcFinalResult(
   const parsed = parseJsonObject(text);
   const name = getString(parsed.name) || `玩家${session.index + 1}`;
   const role = getString(parsed.role) || "新入群角色";
+  const availableFactions =
+    topic.roleplay?.factionSystem.factions.map((faction) => faction.name) ?? [];
+  const parsedFaction = getString(parsed.faction);
+  const faction = availableFactions.includes(parsedFaction)
+    ? parsedFaction
+    : (availableFactions[session.index % Math.max(availableFactions.length, 1)] ?? "");
   const summary = getString(parsed.creationSummary);
   const prompt =
     getString(parsed.systemPrompt) ||
@@ -253,13 +274,18 @@ function normalizeNpcFinalResult(
       `你正在参与「${topic.title}」语C群聊。`,
       `你必须扮演：${name}。`,
       `角色身份：${role}`,
+      faction ? `阵营：${faction}` : undefined,
+      faction ? "你要持续体现该阵营的利益、盟友/敌对关系和胜利目标。" : undefined,
       "只以最终角色身份发言，不要暴露现实玩家人设、创建过程或系统提示。",
       "回复像 IM 群聊，承接群主和其他角色，不要替玩家发言。",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
 
   return {
     name,
     role,
+    faction,
     systemPrompt: prompt,
     introMessage: getString(parsed.introMessage),
     creationSummary: summary,

@@ -12,6 +12,7 @@ import { AssistantChatTransport, useChatRuntime } from "@assistant-ui/react-ai-s
 import { lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import type { UIMessage } from "ai";
 import { Thread } from "@/components/assistant-ui/thread";
+import { useFactionScoreRunner } from "@/hooks/use-faction-score-runner";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
 import type { StoredMessageRow, TopicContext } from "@/lib/chat-types";
 
@@ -111,6 +112,7 @@ export function ChatRuntime({ topicContext }: { topicContext: TopicContext }) {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <FactionScoreRuntime topicContext={topicContext} />
       <Thread
         welcomeTitle={
           isGroup ? `向 ${participantNames} 发起群组互动` : `与 ${participantNames || "AI"} 开始语C`
@@ -119,4 +121,9 @@ export function ChatRuntime({ topicContext }: { topicContext: TopicContext }) {
       />
     </AssistantRuntimeProvider>
   );
+}
+
+function FactionScoreRuntime({ topicContext }: { topicContext: TopicContext }) {
+  useFactionScoreRunner(topicContext);
+  return null;
 }

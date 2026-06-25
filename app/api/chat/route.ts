@@ -23,9 +23,32 @@ const getParticipantModelId = (participant: AiParticipant | undefined) =>
 const buildTopicHeader = (topicContext: TopicContext | undefined) => {
   if (!topicContext) return "";
   const topicDescription = topicContext.topic.description.trim();
+  const roleplay = topicContext.topic.roleplay;
+  const factionSystem = roleplay?.factionSystem;
+  const factionLines = factionSystem
+    ? [
+        `阵营模板：${factionSystem.template}`,
+        `玩家阵营：${roleplay.playerFaction}`,
+        factionSystem.winningFactionId
+          ? `已胜出阵营：${
+              factionSystem.factions.find(
+                (faction) => faction.id === factionSystem.winningFactionId,
+              )?.name ?? factionSystem.winningFactionId
+            }`
+          : undefined,
+        "阵营分数：",
+        ...factionSystem.factions.map(
+          (faction) =>
+            `- ${faction.name}：${faction.currentScore}/${faction.victoryScore}；胜利条件：${faction.victoryCondition}；影响力：${faction.narrativeInfluence}`,
+        ),
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : undefined;
   return [
     `当前主题：${topicContext.topic.title}`,
     topicDescription ? `主题说明：${topicDescription}` : undefined,
+    factionLines,
     `当前会话：${topicContext.chat.title}`,
   ]
     .filter(Boolean)
@@ -44,12 +67,15 @@ const buildDialogSystemPrompt = (
       [
         `你正在与玩家进行一对一语C互动。你必须扮演：${participant.name}。`,
         `角色定位：${participant.role}`,
+        participant.faction ? `所属阵营：${participant.faction}` : undefined,
         `角色提示词：${participant.systemPrompt}`,
         "回复要求：",
         "- 始终保持该角色的口吻、视角和情绪一致性。",
         "- 直接回应玩家，不要跳出角色解释系统设定。",
         "- 可以主动推进互动，但不要替玩家做决定或代替玩家发言。",
-      ].join("\n"),
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
   } else if (topicContext) {
     parts.push("你是该主题下的 AI 助手。结合主题背景回答，保持直接、具体、可执行。");
@@ -65,7 +91,12 @@ const buildGroupSystemPrompt = (
   priorReplies: string[],
 ) => {
   const roster = topicContext.chat.participants
-    .map((ai, index) => `${index + 1}. ${ai.name}（${ai.role}）：${ai.systemPrompt}`)
+    .map(
+      (ai, index) =>
+        `${index + 1}. ${ai.name}（${ai.role}${ai.faction ? `｜${ai.faction}` : ""}）：${
+          ai.systemPrompt
+        }`,
+    )
     .join("\n");
   const parts = [baseSystem?.trim(), buildTopicHeader(topicContext)].filter(Boolean) as string[];
 
@@ -75,6 +106,7 @@ const buildGroupSystemPrompt = (
       "本次只输出你当前角色的一段回复，不要替其他角色发言。",
       `当前轮到你扮演：${participant.name}。`,
       `你的角色定位：${participant.role}`,
+      participant.faction ? `你的阵营：${participant.faction}` : undefined,
       `你的角色提示词：${participant.systemPrompt}`,
       "群聊角色顺序：",
       roster,
@@ -84,6 +116,7 @@ const buildGroupSystemPrompt = (
       `- 必须使用 \`**${participant.name}**\` 开头。`,
       "- 只回复一段，观点要承接玩家和前序角色。",
       "- 始终保持你自己的口吻、视角和情绪一致性。",
+      "- 如果你有阵营，发言要体现阵营利益、胜利目标、盟友/敌对关系和当前分数压力。",
       "- 不要解释你在模拟群聊，不要替玩家发言。",
     ]
       .filter(Boolean)

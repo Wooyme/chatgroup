@@ -7,9 +7,50 @@ import {
 
 export type ChatMode = "dialog" | "group";
 
+export type Faction = {
+  id: string;
+  name: string;
+  description: string;
+  strength: number;
+  initialScore: number;
+  currentScore: number;
+  victoryScore: number;
+  victoryCondition: string;
+  pastMilestones: string[];
+  futureMilestones: string[];
+  narrativeInfluence: string;
+};
+
+export type FactionSystem = {
+  template: string;
+  description: string;
+  factions: Faction[];
+  winningFactionId?: string;
+};
+
+export type FactionScoreDelta = {
+  factionId: string;
+  factionName: string;
+  delta: number;
+  reason: string;
+  milestone?: string;
+};
+
+export type FactionScoreEvent = {
+  id: string;
+  createdAt: number;
+  chatId: string;
+  sourceMessageCount: number;
+  summary: string;
+  deltas: FactionScoreDelta[];
+  winningFactionId?: string;
+};
+
 export type RoleplayTopicProfile = {
   playerRole: string;
   worldView: string;
+  playerFaction: string;
+  factionSystem: FactionSystem;
   reputation: string;
   notes: string;
 };
@@ -59,6 +100,7 @@ export type AiParticipant = {
   id: string;
   name: string;
   role: string;
+  faction?: string;
   systemPrompt: string;
   color: string;
   provider: AiProvider;
@@ -84,6 +126,7 @@ export type ChatSession = {
   mode: ChatMode;
   participants: AiParticipant[];
   recruitment?: ChatRecruitment;
+  factionScoreEvents?: FactionScoreEvent[];
   createdAt: number;
   updatedAt: number;
 };
@@ -97,7 +140,7 @@ export type StoredMessageRow<TContent extends Record<string, unknown> = Record<s
 };
 
 export type TopicContext = {
-  topic: Pick<Topic, "id" | "title" | "description">;
+  topic: Pick<Topic, "id" | "title" | "description" | "roleplay">;
   chat: Pick<ChatSession, "id" | "title" | "mode" | "participants">;
 };
 

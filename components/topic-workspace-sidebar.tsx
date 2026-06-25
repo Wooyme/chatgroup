@@ -341,12 +341,16 @@ export function TopicWorkspaceSidebar({
               {aiList.map((ai) => (
                 <SidebarMenuItem key={ai.id}>
                   <SidebarMenuButton
-                    tooltip={`${ai.name}：${ai.role}\n${getModelDisplayName(ai.modelId, ai.modelName)}`}
+                    tooltip={`${ai.name}：${ai.role}${
+                      ai.faction ? `\n阵营：${ai.faction}` : ""
+                    }\n${getModelDisplayName(ai.modelId, ai.modelName)}`}
                   >
                     <span className={cn("size-2.5 rounded-full", ai.color)} />
                     <span>{ai.name}</span>
                     <span className="text-muted-foreground ms-auto grid min-w-0 justify-items-end text-[10px]">
-                      <span className="max-w-20 truncate">{ai.role}</span>
+                      <span className="max-w-20 truncate">
+                        {ai.faction ? `${ai.faction}｜${ai.role}` : ai.role}
+                      </span>
                       <span className="max-w-20 truncate">
                         {getModelDisplayName(ai.modelId, ai.modelName)}
                       </span>

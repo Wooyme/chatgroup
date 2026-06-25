@@ -8,6 +8,8 @@ import {
   type ChatMode,
   type ChatRecruitment,
   type ChatSession,
+  type FactionScoreDelta,
+  type FactionScoreEvent,
   type NpcCreationMessage,
   type NpcCreationSession,
   type NpcCreationStatus,
@@ -43,12 +45,14 @@ type WorkspaceState = {
   createAi: (
     topicId: string,
     input?: Partial<
-      Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">
+      Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
     >,
   ) => string;
   updateAi: (
     aiId: string,
-    input: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">>,
+    input: Partial<
+      Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
+    >,
   ) => void;
   deleteAi: (aiId: string) => void;
   createChat: (
@@ -62,7 +66,9 @@ type WorkspaceState = {
   createAiAndJoinChat: (
     topicId: string,
     chatId: string,
-    input: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">>,
+    input: Partial<
+      Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
+    >,
   ) => string;
   appendRecruitmentEvent: (
     chatId: string,
@@ -75,9 +81,20 @@ type WorkspaceState = {
   setNpcCreationStatus: (sessionId: string, status: NpcCreationStatus, error?: string) => void;
   completeNpcCreationSession: (
     sessionId: string,
-    input: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">>,
+    input: Partial<
+      Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
+    >,
   ) => string;
   failNpcCreationSession: (sessionId: string, error: string) => void;
+  applyFactionScoreEvent: (
+    chatId: string,
+    input: {
+      sourceMessageCount: number;
+      summary: string;
+      deltas: FactionScoreDelta[];
+      winningFactionId?: string;
+    },
+  ) => void;
   setActiveTopic: (topicId: string) => void;
   setActiveChat: (chatId: string) => void;
   setChatMessages: (chatId: string, rows: StoredMessageRow[]) => void;
@@ -108,12 +125,15 @@ const cloneDefaultAis = () => {
 };
 
 const createAiParticipant = (
-  input?: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">>,
+  input?: Partial<
+    Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
+  >,
   index = 0,
 ): AiParticipant => ({
   id: makeId("ai"),
   name: input?.name?.trim() || "新角色",
   role: input?.role?.trim() || "待设定的人设",
+  ...(input?.faction?.trim() && { faction: input.faction.trim() }),
   systemPrompt: input?.systemPrompt?.trim() || "按照人设进行语C互动，保持角色口吻，主动回应玩家。",
   color: AI_COLORS[index % AI_COLORS.length]!,
   provider: DEFAULT_AI_PROVIDER,
@@ -124,37 +144,6 @@ const createAiParticipant = (
       ? DEFAULT_OPENROUTER_MODEL_NAME
       : undefined),
 });
-
-const withDefaultModel = (ai: AiParticipant): AiParticipant => ({
-  ...ai,
-  provider: ai.provider ?? DEFAULT_AI_PROVIDER,
-  modelId: ai.modelId?.trim() || DEFAULT_OPENROUTER_MODEL_ID,
-  modelName:
-    ai.modelName?.trim() ||
-    (ai.modelId?.trim() === DEFAULT_OPENROUTER_MODEL_ID
-      ? DEFAULT_OPENROUTER_MODEL_NAME
-      : undefined),
-});
-
-const migrateAiModels = (state: Partial<WorkspaceState>): Partial<WorkspaceState> => {
-  const ais = state.ais
-    ? Object.fromEntries(
-        Object.entries(state.ais).map(([aiId, ai]) => [aiId, withDefaultModel(ai)]),
-      )
-    : state.ais;
-  const chats = state.chats
-    ? Object.fromEntries(
-        Object.entries(state.chats).map(([chatId, chat]) => [
-          chatId,
-          {
-            ...chat,
-            participants: chat.participants.map(withDefaultModel),
-          },
-        ]),
-      )
-    : state.chats;
-  return { ...state, ais, chats };
-};
 
 const createChatSession = (
   topicId: string,
@@ -180,10 +169,29 @@ const createChatSession = (
     mode,
     participants,
     ...(recruitment && { recruitment }),
+    factionScoreEvents: [],
     createdAt: timestamp,
     updatedAt: timestamp,
   };
 };
+
+const createFactionScoreEvent = (
+  chatId: string,
+  input: {
+    sourceMessageCount: number;
+    summary: string;
+    deltas: FactionScoreDelta[];
+    winningFactionId?: string;
+  },
+): FactionScoreEvent => ({
+  id: makeId("faction_event"),
+  chatId,
+  sourceMessageCount: input.sourceMessageCount,
+  summary: input.summary,
+  deltas: input.deltas,
+  ...(input.winningFactionId && { winningFactionId: input.winningFactionId }),
+  createdAt: now(),
+});
 
 const createRecruitmentEvent = (
   event: Pick<RecruitmentEvent, "message" | "status" | "sessionId">,
@@ -324,6 +332,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           mode: "group",
           participants: [],
           recruitment,
+          factionScoreEvents: [],
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -459,6 +468,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             ...ai,
             ...(input.name?.trim() && { name: input.name.trim() }),
             ...(input.role?.trim() && { role: input.role.trim() }),
+            ...(input.faction?.trim() && { faction: input.faction.trim() }),
             ...(input.systemPrompt?.trim() && {
               systemPrompt: input.systemPrompt.trim(),
             }),
@@ -729,6 +739,56 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           };
         });
       },
+      applyFactionScoreEvent: (chatId, input) => {
+        set((state) => {
+          const chat = state.chats[chatId];
+          if (!chat) return state;
+          const topic = state.topics[chat.topicId];
+          const factionSystem = topic?.roleplay?.factionSystem;
+          if (!topic || !factionSystem) return state;
+
+          const deltasByFactionId = new Map(
+            input.deltas.map((delta) => [delta.factionId, delta.delta]),
+          );
+          const nextFactions = factionSystem.factions.map((faction) => {
+            const nextScore = faction.currentScore + (deltasByFactionId.get(faction.id) ?? 0);
+            return { ...faction, currentScore: Math.max(0, nextScore) };
+          });
+          const winningFaction =
+            input.winningFactionId ||
+            nextFactions.find((faction) => faction.currentScore >= faction.victoryScore)?.id;
+          const event = createFactionScoreEvent(chatId, {
+            ...input,
+            winningFactionId: winningFaction,
+          });
+
+          return {
+            topics: {
+              ...state.topics,
+              [topic.id]: {
+                ...topic,
+                roleplay: {
+                  ...topic.roleplay!,
+                  factionSystem: {
+                    ...factionSystem,
+                    factions: nextFactions,
+                    ...(winningFaction && { winningFactionId: winningFaction }),
+                  },
+                },
+                updatedAt: now(),
+              },
+            },
+            chats: {
+              ...state.chats,
+              [chatId]: {
+                ...chat,
+                factionScoreEvents: [...(chat.factionScoreEvents ?? []), event],
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
       setActiveTopic: (topicId) => {
         const { topics, chats } = get();
         if (!topics[topicId]) return;
@@ -779,15 +839,10 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: "simple-simulator-chat-workspace",
-      version: 4,
+      version: 5,
       migrate: (persisted) => {
         const state = persisted as Partial<WorkspaceState>;
-        if (state.ais) {
-          return {
-            ...migrateAiModels(state),
-            npcCreationSessions: state.npcCreationSessions ?? {},
-          };
-        }
+        if (state.ais) return createInitialState();
         return createInitialState();
       },
     },

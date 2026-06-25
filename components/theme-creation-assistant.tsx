@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
-import type { RoleplayTopicProfile } from "@/lib/chat-types";
+import type { FactionSystem, RoleplayTopicProfile } from "@/lib/chat-types";
 
 type BuilderMessage = {
   id: string;
@@ -20,25 +20,33 @@ type ThemeCreationAssistantProps = {
 };
 
 const WORLD_OPTIONS = [
+  { value: "宫廷奇幻", description: "王权、贵族、法师、边境战争与古老盟约交织。" },
+  { value: "现代王室", description: "媒体、议会、财阀、外交危机与王室私生活都在聚光灯下。" },
+  { value: "末日王国", description: "灾变后的城邦秩序，资源、军队、信仰和幸存者互相牵制。" },
+  { value: "星际帝国", description: "舰队、殖民星、贵族院、AI 政务与星际叛乱构成权力舞台。" },
+  { value: "架空权谋", description: "低魔或无魔的架空大陆，宫廷派系、密探和诸侯同台博弈。" },
+];
+
+const FACTION_TEMPLATES = [
   {
-    value: "宫廷奇幻",
-    description: "王权、贵族、法师、边境战争与古老盟约交织。",
+    value: "善良邪恶对立",
+    description: "光明盟约、暗影阵线和中立者围绕秩序、诱惑与牺牲对抗。",
   },
   {
-    value: "现代王室",
-    description: "媒体、议会、财阀、外交危机与王室私生活都在聚光灯下。",
+    value: "多个政治立场的斗争",
+    description: "王权派、议会派、军方派、改革派围绕制度和权力重分配博弈。",
   },
   {
-    value: "末日王国",
-    description: "灾变后的城邦秩序，资源、军队、信仰和幸存者互相牵制。",
+    value: "种族/物种间的斗争",
+    description: "不同族群、边境共同体和排外势力争夺生存空间与话语权。",
   },
   {
-    value: "星际帝国",
-    description: "舰队、殖民星、贵族院、AI 政务与星际叛乱构成权力舞台。",
+    value: "多神的代理战争",
+    description: "不同神系通过信徒、圣物、神谕和战争代理人争夺时代走向。",
   },
   {
-    value: "架空权谋",
-    description: "低魔或无魔的架空大陆，宫廷派系、密探和诸侯同台博弈。",
+    value: "阶级与资源冲突",
+    description: "贵族/资本、平民组织、黑市网络和技术官僚争夺资源分配。",
   },
 ];
 
@@ -63,6 +71,12 @@ const NPC_PERSONA_TEMPLATES = [
 ];
 
 const NPC_COUNT_OPTIONS = [1, 3, 5, 8];
+
+const EMPTY_FACTION_SYSTEM: FactionSystem = {
+  template: "",
+  description: "",
+  factions: [],
+};
 
 const makeId = () => Math.random().toString(36).slice(2, 10);
 
@@ -89,12 +103,25 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
   const [messages, setMessages] = useState<BuilderMessage[]>([
     makeAssistantMessage("你想开一个什么语C群？先告诉我你想扮演谁。比如：我想扮演女王。"),
   ]);
-  const [step, setStep] = useState<"role" | "world" | "reputation" | "notes" | "review">("role");
+  const [step, setStep] = useState<
+    | "role"
+    | "world"
+    | "factionTemplate"
+    | "factionDraft"
+    | "playerFaction"
+    | "reputation"
+    | "notes"
+    | "review"
+  >("role");
   const [input, setInput] = useState("");
+  const [factionNote, setFactionNote] = useState("");
+  const [isGeneratingFaction, setIsGeneratingFaction] = useState(false);
   const [npcCount, setNpcCount] = useState(3);
   const [profile, setProfile] = useState<RoleplayTopicProfile>({
     playerRole: "",
     worldView: "",
+    playerFaction: "",
+    factionSystem: EMPTY_FACTION_SYSTEM,
     reputation: "",
     notes: "",
   });
@@ -103,6 +130,8 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
     const title = `${profile.playerRole || "玩家角色"}的${profile.worldView || "语C"}群`;
     const description = [
       `世界观：${profile.worldView}`,
+      `阵营模板：${profile.factionSystem.template}`,
+      `玩家阵营：${profile.playerFaction}`,
       `群主角色：${profile.playerRole}`,
       `群主风评：${profile.reputation}`,
       profile.notes ? `补充设定：${profile.notes}` : undefined,
@@ -133,6 +162,61 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
     setProfile((current) => ({ ...current, worldView: value }));
     append(
       makeUserMessage(`我选择${value}`),
+      makeAssistantMessage(
+        "这个群的阵营冲突是什么类型？选一个模板后，我会拟一版强度、胜利条件和关键节点。",
+      ),
+    );
+    setStep("factionTemplate");
+  };
+
+  const chooseFactionTemplate = async (value: string) => {
+    append(makeUserMessage(`阵营模板选${value}`), makeAssistantMessage("我先拟一版阵营草案。"));
+    setStep("factionDraft");
+    await updateFactionDraft(value, "");
+  };
+
+  const updateFactionDraft = async (template: string, note: string) => {
+    setIsGeneratingFaction(true);
+    try {
+      const factionSystem = await generateFactionSystem({
+        playerRole: profile.playerRole,
+        worldView: profile.worldView,
+        template,
+        note,
+        current: profile.factionSystem.factions.length > 0 ? profile.factionSystem : undefined,
+      });
+      setProfile((current) => ({ ...current, factionSystem }));
+      append(
+        makeAssistantMessage(
+          `阵营草案已更新。\n${formatFactionSystemBrief(factionSystem)}\n\n你可以继续补充，也可以使用这版。`,
+        ),
+      );
+    } catch {
+      const fallback = makeFallbackFactionSystem(template);
+      setProfile((current) => ({ ...current, factionSystem: fallback }));
+      append(
+        makeAssistantMessage(
+          `模型生成失败，我先给一版可编辑草案。\n${formatFactionSystemBrief(fallback)}`,
+        ),
+      );
+    } finally {
+      setIsGeneratingFaction(false);
+      setFactionNote("");
+    }
+  };
+
+  const acceptFactionDraft = () => {
+    append(
+      makeUserMessage("阵营草案确认"),
+      makeAssistantMessage("你的角色属于哪个阵营？这会影响 NPC 和主群冲突关系。"),
+    );
+    setStep("playerFaction");
+  };
+
+  const choosePlayerFaction = (value: string) => {
+    setProfile((current) => ({ ...current, playerFaction: value }));
+    append(
+      makeUserMessage(`我的阵营是${value}`),
       makeAssistantMessage("你的风评怎么样？这会影响其他玩家靠近你的方式。"),
     );
     setStep("reputation");
@@ -200,6 +284,54 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
           ))}
 
           {step === "world" ? <OptionGrid options={WORLD_OPTIONS} onChoose={chooseWorld} /> : null}
+          {step === "factionTemplate" ? (
+            <OptionGrid options={FACTION_TEMPLATES} onChoose={chooseFactionTemplate} />
+          ) : null}
+          {step === "factionDraft" ? (
+            <div className="border-border bg-muted/40 grid gap-4 rounded-lg border p-4">
+              <FactionSystemSummary factionSystem={profile.factionSystem} />
+              <div className="grid gap-2">
+                <label className="text-sm font-medium" htmlFor="faction-note">
+                  补充或修改阵营设定
+                </label>
+                <textarea
+                  id="faction-note"
+                  className="border-input bg-background focus-visible:border-ring focus-visible:ring-ring/50 min-h-24 w-full resize-y rounded-md border px-3 py-2 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:ring-[3px]"
+                  value={factionNote}
+                  placeholder="例如：暗影阵线已经夺取北境圣物；王权派开局强度更高；胜利条件改成控制三座要塞。"
+                  onChange={(event) => setFactionNote(event.target.value)}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isGeneratingFaction || !profile.factionSystem.template}
+                  onClick={() =>
+                    updateFactionDraft(profile.factionSystem.template, factionNote.trim())
+                  }
+                >
+                  {isGeneratingFaction ? "DM 正在更新..." : "让 DM 更新草案"}
+                </Button>
+                <Button
+                  type="button"
+                  disabled={isGeneratingFaction || profile.factionSystem.factions.length === 0}
+                  onClick={acceptFactionDraft}
+                >
+                  使用这版阵营
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {step === "playerFaction" ? (
+            <OptionGrid
+              options={profile.factionSystem.factions.map((faction) => ({
+                value: faction.name,
+                description: `${faction.description} 当前 ${faction.currentScore}/${faction.victoryScore}`,
+              }))}
+              onChoose={choosePlayerFaction}
+            />
+          ) : null}
           {step === "reputation" ? (
             <OptionGrid options={REPUTATION_OPTIONS} onChoose={chooseReputation} />
           ) : null}
@@ -211,6 +343,7 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
                   {summary.description}
                 </div>
               </div>
+              <FactionSystemSummary factionSystem={profile.factionSystem} />
               <div className="grid gap-2">
                 <div className="text-sm font-medium">寻找其他玩家数量</div>
                 <div className="flex flex-wrap gap-2">
@@ -263,6 +396,51 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
   );
 }
 
+function FactionSystemSummary({ factionSystem }: { factionSystem: FactionSystem }) {
+  if (factionSystem.factions.length === 0) {
+    return (
+      <div className="text-muted-foreground rounded-md border px-3 py-2 text-sm">
+        阵营草案尚未生成。
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-1">
+        <div className="text-sm font-semibold">{factionSystem.template}</div>
+        <div className="text-muted-foreground text-sm">{factionSystem.description}</div>
+      </div>
+      <div className="grid gap-2">
+        {factionSystem.factions.map((faction) => (
+          <div key={faction.id} className="border-border bg-background rounded-md border p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium">{faction.name}</span>
+              <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-xs">
+                强度 {faction.strength}
+              </span>
+              <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-xs">
+                {faction.currentScore}/{faction.victoryScore}
+              </span>
+            </div>
+            <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
+              {faction.description}
+            </div>
+            <div className="mt-2 text-xs leading-relaxed">
+              <span className="font-medium">胜利条件：</span>
+              {faction.victoryCondition}
+            </div>
+            <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
+              已发生：{faction.pastMilestones.join("、") || "无"}；关键节点：
+              {faction.futureMilestones.join("、") || "待定"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function OptionGrid({
   options,
   onChoose,
@@ -287,4 +465,141 @@ function OptionGrid({
       ))}
     </div>
   );
+}
+
+async function generateFactionSystem({
+  playerRole,
+  worldView,
+  template,
+  note,
+  current,
+}: {
+  playerRole: string;
+  worldView: string;
+  template: string;
+  note: string;
+  current?: FactionSystem;
+}) {
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      responseMode: "text",
+      system: [
+        "你是语C群的主持人/DM，正在和群主创建阵营系统。",
+        "你要提出阵营强度、初始分数、叙事影响力、胜利条件、已发生关键节点和未来关键节点。",
+        "强度是 1-5 的整数，同时影响初始分数和叙事地位。",
+        "必须返回严格 JSON，不要 Markdown，不要解释。",
+      ].join("\n"),
+      prompt: [
+        `群主角色：${playerRole}`,
+        `世界观：${worldView}`,
+        `阵营模板：${template}`,
+        current ? `当前草案：${JSON.stringify(current)}` : undefined,
+        note ? `玩家补充/修改：${note}` : undefined,
+        "请生成 3-5 个阵营。每个阵营字段：id、name、description、strength、initialScore、currentScore、victoryScore、victoryCondition、pastMilestones、futureMilestones、narrativeInfluence。",
+        "currentScore 必须等于 initialScore。victoryScore 默认 100，除非设定需要可在 80-150 之间调整。",
+        '返回格式：{"template":"...","description":"...","factions":[...]}',
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    }),
+  });
+  if (!response.ok) throw new Error("faction generation failed");
+  const payload = (await response.json()) as { text?: string };
+  return normalizeFactionSystem(payload.text ?? "", template);
+}
+
+function normalizeFactionSystem(text: string, fallbackTemplate: string): FactionSystem {
+  const parsed = parseJsonObject(text);
+  const factions = Array.isArray(parsed.factions) ? parsed.factions : [];
+  if (factions.length === 0) throw new Error("missing factions");
+  return {
+    template: getString(parsed.template) || fallbackTemplate,
+    description: getString(parsed.description) || `${fallbackTemplate}阵营冲突。`,
+    factions: factions.slice(0, 5).map((raw, index) => {
+      const item = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      const strength = clampNumber(item.strength, 1, 5, 3);
+      const initialScore = clampNumber(item.initialScore, 0, 100, strength * 10);
+      return {
+        id: getString(item.id) || `faction_${index + 1}`,
+        name: getString(item.name) || `阵营${index + 1}`,
+        description: getString(item.description) || "待补充。",
+        strength,
+        initialScore,
+        currentScore: clampNumber(item.currentScore, 0, 150, initialScore),
+        victoryScore: clampNumber(item.victoryScore, 50, 200, 100),
+        victoryCondition: getString(item.victoryCondition) || "率先完成核心目标。",
+        pastMilestones: getStringArray(item.pastMilestones),
+        futureMilestones: getStringArray(item.futureMilestones),
+        narrativeInfluence: getString(item.narrativeInfluence) || "影响力普通。",
+      };
+    }),
+  };
+}
+
+function makeFallbackFactionSystem(template: string): FactionSystem {
+  const names =
+    template === "善良邪恶对立"
+      ? ["光明盟约", "暗影阵线", "中立调停者"]
+      : template === "多个政治立场的斗争"
+        ? ["王权派", "议会派", "军方派", "民间改革派"]
+        : template === "种族/物种间的斗争"
+          ? ["人类诸国", "异族联盟", "边境共同体", "排外派"]
+          : template === "多神的代理战争"
+            ? ["秩序神系", "丰饶神系", "战争神系", "虚无神系"]
+            : ["贵族资本集团", "工会平民组织", "黑市网络", "技术官僚"];
+  return {
+    template,
+    description: `${template}下的多方阵营正在争夺局势主导权。`,
+    factions: names.map((name, index) => ({
+      id: `faction_${index + 1}`,
+      name,
+      description: `${name}正在寻找扩大影响力的机会。`,
+      strength: 3,
+      initialScore: 30,
+      currentScore: 30,
+      victoryScore: 100,
+      victoryCondition: "率先完成核心目标并取得局势主导权。",
+      pastMilestones: ["局势已经进入公开竞争阶段"],
+      futureMilestones: ["争取关键盟友", "控制关键资源", "赢得公开事件"],
+      narrativeInfluence: "拥有中等资源、声望和行动能力。",
+    })),
+  };
+}
+
+function formatFactionSystemBrief(factionSystem: FactionSystem) {
+  return factionSystem.factions
+    .map(
+      (faction) =>
+        `${faction.name}：强度${faction.strength}，${faction.currentScore}/${faction.victoryScore}。胜利条件：${faction.victoryCondition}`,
+    )
+    .join("\n");
+}
+
+function parseJsonObject(text: string): Record<string, unknown> {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const source = fenced ?? text;
+  const start = source.indexOf("{");
+  const end = source.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) throw new Error("missing json");
+  const parsed = JSON.parse(source.slice(start, end + 1)) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("invalid json");
+  return parsed as Record<string, unknown>;
+}
+
+function getString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim())
+    : [];
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number) {
+  const number = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(min, Math.min(max, Math.round(number)));
 }

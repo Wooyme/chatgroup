@@ -64,29 +64,34 @@ export function NpcRecruitmentWorkspace({
             <span className="min-w-0 flex-1 truncate text-left">群聊</span>
             <span className="text-muted-foreground text-xs">{chat.participants.length}</span>
           </Button>
-          {sessions.map((session) => (
-            <Button
-              key={session.id}
-              type="button"
-              variant={selectedId === session.id ? "secondary" : "ghost"}
-              className="h-auto justify-start gap-2 rounded-md px-2 py-2"
-              onClick={() => setSelectedId(session.id)}
-            >
-              <SessionStatusIcon status={session.status} />
-              <span className="min-w-0 flex-1 truncate text-left">
-                候选玩家 {session.index + 1}
-              </span>
-              <span className="text-muted-foreground text-xs">
-                {session.status === "completed"
-                  ? "已入群"
-                  : session.status === "failed"
-                    ? "失败"
-                    : session.status === "running"
-                      ? "创建中"
-                      : "排队"}
-              </span>
-            </Button>
-          ))}
+          {sessions.map((session) => {
+            const participant = chat.participants.find((ai) => ai.id === session.resultAiId);
+            return (
+              <Button
+                key={session.id}
+                type="button"
+                variant={selectedId === session.id ? "secondary" : "ghost"}
+                className="h-auto justify-start gap-2 rounded-md px-2 py-2"
+                onClick={() => setSelectedId(session.id)}
+              >
+                <SessionStatusIcon status={session.status} />
+                <span className="min-w-0 flex-1 truncate text-left">
+                  {participant?.faction
+                    ? `${participant.faction}｜${participant.name}`
+                    : `候选玩家 ${session.index + 1}`}
+                </span>
+                <span className="text-muted-foreground text-xs">
+                  {session.status === "completed"
+                    ? "已入群"
+                    : session.status === "failed"
+                      ? "失败"
+                      : session.status === "running"
+                        ? "创建中"
+                        : "排队"}
+                </span>
+              </Button>
+            );
+          })}
         </div>
         <div className="mt-auto border-t p-3">
           <div className="text-muted-foreground max-h-40 overflow-y-auto text-xs leading-relaxed">
