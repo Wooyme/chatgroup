@@ -3,6 +3,7 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
+  generateText,
   type JSONSchema7,
   type ModelMessage,
   streamText,
@@ -168,15 +169,33 @@ const streamGroup = ({
 export async function POST(req: Request) {
   const {
     messages,
+    prompt,
     system,
     tools = {},
     topicContext,
+    responseMode,
+    modelId,
   }: {
-    messages: UIMessage[];
+    messages?: UIMessage[];
+    prompt?: string;
     system?: string;
     tools?: Record<string, { description?: string; parameters: JSONSchema7 }>;
     topicContext?: TopicContext;
+    responseMode?: "stream" | "text";
+    modelId?: string;
   } = await req.json();
+  if (responseMode === "text") {
+    const result = await generateText({
+      model: openrouter.chat(modelId?.trim() || DEFAULT_OPENROUTER_MODEL_ID),
+      system,
+      prompt: prompt ?? "",
+    });
+    return Response.json({ text: result.text });
+  }
+
+  if (!messages) {
+    return Response.json({ error: "messages are required for stream responses" }, { status: 400 });
+  }
   const modelMessages = await convertToModelMessages(messages);
 
   if (topicContext?.chat.mode === "group" && topicContext.chat.participants.length > 0) {

@@ -7,6 +7,54 @@ import {
 
 export type ChatMode = "dialog" | "group";
 
+export type RoleplayTopicProfile = {
+  playerRole: string;
+  worldView: string;
+  reputation: string;
+  notes: string;
+};
+
+export type RecruitmentEvent = {
+  id: string;
+  sessionId?: string;
+  message: string;
+  createdAt: number;
+  status: "info" | "success" | "error";
+};
+
+export type ChatRecruitment = {
+  status: "idle" | "running" | "completed" | "failed";
+  targetCount: number;
+  completedCount: number;
+  failedCount: number;
+  sessionIds: string[];
+  events: RecruitmentEvent[];
+};
+
+export type NpcCreationMessage = {
+  id: string;
+  role: "dm" | "npc" | "system";
+  name: string;
+  content: string;
+  createdAt: number;
+};
+
+export type NpcCreationStatus = "queued" | "running" | "completed" | "failed";
+
+export type NpcCreationSession = {
+  id: string;
+  topicId: string;
+  groupChatId: string;
+  index: number;
+  status: NpcCreationStatus;
+  personaTemplate: string;
+  messages: NpcCreationMessage[];
+  resultAiId?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type AiParticipant = {
   id: string;
   name: string;
@@ -22,6 +70,7 @@ export type Topic = {
   id: string;
   title: string;
   description: string;
+  roleplay?: RoleplayTopicProfile;
   aiIds: string[];
   chatIds: string[];
   createdAt: number;
@@ -34,6 +83,7 @@ export type ChatSession = {
   title: string;
   mode: ChatMode;
   participants: AiParticipant[];
+  recruitment?: ChatRecruitment;
   createdAt: number;
   updatedAt: number;
 };

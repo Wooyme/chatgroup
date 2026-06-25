@@ -6,7 +6,13 @@ import {
   DEFAULT_AI_PARTICIPANTS,
   type AiParticipant,
   type ChatMode,
+  type ChatRecruitment,
   type ChatSession,
+  type NpcCreationMessage,
+  type NpcCreationSession,
+  type NpcCreationStatus,
+  type RecruitmentEvent,
+  type RoleplayTopicProfile,
   type StoredMessageRow,
   type Topic,
 } from "@/lib/chat-types";
@@ -20,9 +26,17 @@ type WorkspaceState = {
   topics: Record<string, Topic>;
   ais: Record<string, AiParticipant>;
   chats: Record<string, ChatSession>;
+  npcCreationSessions: Record<string, NpcCreationSession>;
   messages: Record<string, StoredMessageRow[]>;
   activeTopicId: string;
   activeChatId: string;
+  createRoleplayTopic: (input: {
+    title: string;
+    description: string;
+    roleplay: RoleplayTopicProfile;
+    groupTitle: string;
+    personaTemplates: string[];
+  }) => { topicId: string; chatId: string; sessionIds: string[] };
   createTopic: (title?: string) => string;
   renameTopic: (topicId: string, title: string) => void;
   deleteTopic: (topicId: string) => void;
@@ -45,6 +59,25 @@ type WorkspaceState = {
   ) => string;
   renameChat: (chatId: string, title: string) => void;
   deleteChat: (chatId: string) => void;
+  createAiAndJoinChat: (
+    topicId: string,
+    chatId: string,
+    input: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">>,
+  ) => string;
+  appendRecruitmentEvent: (
+    chatId: string,
+    event: Pick<RecruitmentEvent, "message" | "status" | "sessionId">,
+  ) => void;
+  appendNpcCreationMessage: (
+    sessionId: string,
+    message: Pick<NpcCreationMessage, "role" | "name" | "content">,
+  ) => void;
+  setNpcCreationStatus: (sessionId: string, status: NpcCreationStatus, error?: string) => void;
+  completeNpcCreationSession: (
+    sessionId: string,
+    input: Partial<Pick<AiParticipant, "name" | "role" | "systemPrompt" | "modelId" | "modelName">>,
+  ) => string;
+  failNpcCreationSession: (sessionId: string, error: string) => void;
   setActiveTopic: (topicId: string) => void;
   setActiveChat: (chatId: string) => void;
   setChatMessages: (chatId: string, rows: StoredMessageRow[]) => void;
@@ -128,6 +161,7 @@ const createChatSession = (
   mode: ChatMode,
   participants: AiParticipant[],
   title?: string,
+  recruitment?: ChatRecruitment,
 ): ChatSession => {
   const timestamp = now();
   const fallbackTitle =
@@ -145,9 +179,71 @@ const createChatSession = (
     title: fallbackTitle,
     mode,
     participants,
+    ...(recruitment && { recruitment }),
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+};
+
+const createRecruitmentEvent = (
+  event: Pick<RecruitmentEvent, "message" | "status" | "sessionId">,
+): RecruitmentEvent => ({
+  id: makeId("event"),
+  message: event.message,
+  status: event.status,
+  ...(event.sessionId && { sessionId: event.sessionId }),
+  createdAt: now(),
+});
+
+const createNpcCreationSession = (
+  topicId: string,
+  groupChatId: string,
+  index: number,
+  personaTemplate: string,
+): NpcCreationSession => {
+  const timestamp = now();
+  return {
+    id: makeId("npc_session"),
+    topicId,
+    groupChatId,
+    index,
+    status: "queued",
+    personaTemplate,
+    messages: [
+      {
+        id: makeId("npc_msg"),
+        role: "system",
+        name: "系统",
+        content: `已为候选玩家 ${index + 1} 分配扮演者人设：${personaTemplate}`,
+        createdAt: timestamp,
+      },
+    ],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+};
+
+const getNextRecruitment = (
+  recruitment: ChatRecruitment,
+  completedDelta: number,
+  failedDelta: number,
+) => {
+  const completedCount = recruitment.completedCount + completedDelta;
+  const failedCount = recruitment.failedCount + failedDelta;
+  const finishedCount = completedCount + failedCount;
+  const status =
+    finishedCount < recruitment.targetCount
+      ? "running"
+      : completedCount > 0
+        ? "completed"
+        : "failed";
+
+  return {
+    ...recruitment,
+    completedCount,
+    failedCount,
+    status,
+  } satisfies ChatRecruitment;
 };
 
 const createInitialState = () => {
@@ -170,6 +266,7 @@ const createInitialState = () => {
     ais: Object.fromEntries(defaultAis.map((ai) => [ai.id, ai])),
     chats: { [chat.id]: chat },
     messages: { [chat.id]: [] },
+    npcCreationSessions: {},
     activeTopicId: topicId,
     activeChatId: chat.id,
   };
@@ -200,6 +297,63 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set, get) => ({
       ...initialState,
+      createRoleplayTopic: ({ title, description, roleplay, groupTitle, personaTemplates }) => {
+        const timestamp = now();
+        const topicId = makeId("topic");
+        const chatId = makeId("chat");
+        const sessions = personaTemplates.map((persona, index) =>
+          createNpcCreationSession(topicId, chatId, index, persona),
+        );
+        const recruitment: ChatRecruitment = {
+          status: "running",
+          targetCount: sessions.length,
+          completedCount: 0,
+          failedCount: 0,
+          sessionIds: sessions.map((session) => session.id),
+          events: [
+            createRecruitmentEvent({
+              message: `群聊已创建，正在寻找 ${sessions.length} 位其他玩家。`,
+              status: "info",
+            }),
+          ],
+        };
+        const chat: ChatSession = {
+          id: chatId,
+          topicId,
+          title: groupTitle.trim() || `${title.trim() || "新主题"} 群聊`,
+          mode: "group",
+          participants: [],
+          recruitment,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+
+        set((state) => ({
+          topics: {
+            ...state.topics,
+            [topicId]: {
+              id: topicId,
+              title: title.trim() || "新主题",
+              description,
+              roleplay,
+              aiIds: [],
+              chatIds: [chat.id],
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            },
+          },
+          chats: { ...state.chats, [chat.id]: chat },
+          messages: { ...state.messages, [chat.id]: [] },
+          npcCreationSessions: {
+            ...state.npcCreationSessions,
+            ...Object.fromEntries(sessions.map((session) => [session.id, session])),
+          },
+          activeTopicId: topicId,
+          activeChatId: chat.id,
+        }));
+
+        return { topicId, chatId: chat.id, sessionIds: sessions.map((session) => session.id) };
+      },
       createTopic: (title) => {
         const timestamp = now();
         const topicId = makeId("topic");
@@ -212,6 +366,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
               id: topicId,
               title: title?.trim() || "新主题",
               description: "",
+              roleplay: undefined,
               aiIds: defaultAis.map((ai) => ai.id),
               chatIds: [chat.id],
               createdAt: timestamp,
@@ -257,6 +412,11 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             delete chats[chatId];
             delete messages[chatId];
           }
+          const npcCreationSessions = Object.fromEntries(
+            Object.entries(state.npcCreationSessions).filter(
+              ([, session]) => session.topicId !== topicId,
+            ),
+          );
 
           const remainingTopicId = Object.keys(topics)[0];
           if (!remainingTopicId) return createInitialState();
@@ -265,6 +425,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             topics,
             ais,
             chats,
+            npcCreationSessions,
             messages,
             activeTopicId: remainingTopicId,
             activeChatId,
@@ -397,6 +558,177 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           };
         });
       },
+      createAiAndJoinChat: (topicId, chatId, input) => {
+        const state = get();
+        const topic = state.topics[topicId];
+        const chat = state.chats[chatId];
+        if (!topic || !chat) return "";
+        const ai = createAiParticipant(input, topic.aiIds.length);
+        set((current) => ({
+          ais: { ...current.ais, [ai.id]: ai },
+          topics: {
+            ...current.topics,
+            [topicId]: {
+              ...topic,
+              aiIds: [...topic.aiIds, ai.id],
+              updatedAt: now(),
+            },
+          },
+          chats: {
+            ...current.chats,
+            [chatId]: {
+              ...chat,
+              participants: [...chat.participants, ai],
+              updatedAt: now(),
+            },
+          },
+        }));
+        return ai.id;
+      },
+      appendRecruitmentEvent: (chatId, event) => {
+        set((state) => {
+          const chat = state.chats[chatId];
+          if (!chat?.recruitment) return state;
+          return {
+            chats: {
+              ...state.chats,
+              [chatId]: {
+                ...chat,
+                recruitment: {
+                  ...chat.recruitment,
+                  events: [...chat.recruitment.events, createRecruitmentEvent(event)],
+                },
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
+      appendNpcCreationMessage: (sessionId, message) => {
+        set((state) => {
+          const session = state.npcCreationSessions[sessionId];
+          if (!session) return state;
+          return {
+            npcCreationSessions: {
+              ...state.npcCreationSessions,
+              [sessionId]: {
+                ...session,
+                messages: [
+                  ...session.messages,
+                  {
+                    id: makeId("npc_msg"),
+                    role: message.role,
+                    name: message.name,
+                    content: message.content,
+                    createdAt: now(),
+                  },
+                ],
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
+      setNpcCreationStatus: (sessionId, status, error) => {
+        set((state) => {
+          const session = state.npcCreationSessions[sessionId];
+          if (!session) return state;
+          return {
+            npcCreationSessions: {
+              ...state.npcCreationSessions,
+              [sessionId]: {
+                ...session,
+                status,
+                ...(error && { error }),
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
+      completeNpcCreationSession: (sessionId, input) => {
+        const state = get();
+        const session = state.npcCreationSessions[sessionId];
+        if (!session || session.status === "completed") return session?.resultAiId ?? "";
+        const aiId = get().createAiAndJoinChat(session.topicId, session.groupChatId, input);
+        if (!aiId) return "";
+        set((current) => {
+          const latestSession = current.npcCreationSessions[sessionId];
+          const chat = current.chats[session.groupChatId];
+          if (!latestSession || !chat?.recruitment) return current;
+          const recruitment = getNextRecruitment(chat.recruitment, 1, 0);
+          return {
+            npcCreationSessions: {
+              ...current.npcCreationSessions,
+              [sessionId]: {
+                ...latestSession,
+                status: "completed",
+                resultAiId: aiId,
+                updatedAt: now(),
+              },
+            },
+            chats: {
+              ...current.chats,
+              [session.groupChatId]: {
+                ...chat,
+                recruitment: {
+                  ...recruitment,
+                  events: [
+                    ...recruitment.events,
+                    createRecruitmentEvent({
+                      sessionId,
+                      status: "success",
+                      message: `${input.name?.trim() || "新玩家"} 已完成角色创建并加入群聊。`,
+                    }),
+                  ],
+                },
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+        return aiId;
+      },
+      failNpcCreationSession: (sessionId, error) => {
+        set((state) => {
+          const session = state.npcCreationSessions[sessionId];
+          if (!session || session.status === "failed" || session.status === "completed") {
+            return state;
+          }
+          const chat = state.chats[session.groupChatId];
+          if (!chat?.recruitment) return state;
+          const recruitment = getNextRecruitment(chat.recruitment, 0, 1);
+          return {
+            npcCreationSessions: {
+              ...state.npcCreationSessions,
+              [sessionId]: {
+                ...session,
+                status: "failed",
+                error,
+                updatedAt: now(),
+              },
+            },
+            chats: {
+              ...state.chats,
+              [session.groupChatId]: {
+                ...chat,
+                recruitment: {
+                  ...recruitment,
+                  events: [
+                    ...recruitment.events,
+                    createRecruitmentEvent({
+                      sessionId,
+                      status: "error",
+                      message: `候选玩家 ${session.index + 1} 创建失败：${error}`,
+                    }),
+                  ],
+                },
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
       setActiveTopic: (topicId) => {
         const { topics, chats } = get();
         if (!topics[topicId]) return;
@@ -447,10 +779,15 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: "simple-simulator-chat-workspace",
-      version: 3,
+      version: 4,
       migrate: (persisted) => {
         const state = persisted as Partial<WorkspaceState>;
-        if (state.ais) return migrateAiModels(state);
+        if (state.ais) {
+          return {
+            ...migrateAiModels(state),
+            npcCreationSessions: state.npcCreationSessions ?? {},
+          };
+        }
         return createInitialState();
       },
     },

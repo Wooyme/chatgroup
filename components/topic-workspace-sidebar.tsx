@@ -89,15 +89,19 @@ type WorkspaceModalApi = {
 
 type TopicWorkspaceSidebarProps = React.ComponentProps<typeof Sidebar> & {
   modal: WorkspaceModalApi;
+  onCreateTopicAssistant: () => void;
 };
 
-export function TopicWorkspaceSidebar({ modal, ...props }: TopicWorkspaceSidebarProps) {
+export function TopicWorkspaceSidebar({
+  modal,
+  onCreateTopicAssistant,
+  ...props
+}: TopicWorkspaceSidebarProps) {
   const topics = useChatWorkspaceStore((state) => state.topics);
   const ais = useChatWorkspaceStore((state) => state.ais);
   const chats = useChatWorkspaceStore((state) => state.chats);
   const activeTopicId = useChatWorkspaceStore((state) => state.activeTopicId);
   const activeChatId = useChatWorkspaceStore((state) => state.activeChatId);
-  const createTopic = useChatWorkspaceStore((state) => state.createTopic);
   const renameTopic = useChatWorkspaceStore((state) => state.renameTopic);
   const deleteTopic = useChatWorkspaceStore((state) => state.deleteTopic);
   const createAi = useChatWorkspaceStore((state) => state.createAi);
@@ -118,11 +122,6 @@ export function TopicWorkspaceSidebar({ modal, ...props }: TopicWorkspaceSidebar
     .map((chatId) => chats[chatId])
     .filter(Boolean)
     .sort((a, b) => b.updatedAt - a.updatedAt);
-
-  const addTopic = async () => {
-    const title = await modal.prompt({ title: "主题名称", defaultValue: "新主题" });
-    if (title !== null) createTopic(title);
-  };
 
   const editTopic = async (topicId: string, currentTitle: string) => {
     const title = await modal.prompt({
@@ -294,7 +293,7 @@ export function TopicWorkspaceSidebar({ modal, ...props }: TopicWorkspaceSidebar
       <SidebarContent className="px-1">
         <SidebarGroup>
           <SidebarGroupLabel>主题</SidebarGroupLabel>
-          <SidebarGroupAction aria-label="创建主题" onClick={addTopic}>
+          <SidebarGroupAction aria-label="创建主题" onClick={onCreateTopicAssistant}>
             <PlusIcon />
           </SidebarGroupAction>
           <SidebarGroupContent>
