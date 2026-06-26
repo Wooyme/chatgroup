@@ -10,12 +10,18 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ChatSession, NpcCreationSession, Topic } from "@/lib/chat-types";
+import type {
+  ChatSession,
+  NpcCreationSession,
+  NpcProgressionSession,
+  Topic,
+} from "@/lib/chat-types";
 
 type NpcRecruitmentWorkspaceProps = {
   topic: Topic;
   chat: ChatSession;
   sessions: NpcCreationSession[];
+  progressionSessions: NpcProgressionSession[];
   groupChat: ReactNode;
 };
 
@@ -23,10 +29,14 @@ export function NpcRecruitmentWorkspace({
   topic,
   chat,
   sessions,
+  progressionSessions,
   groupChat,
 }: NpcRecruitmentWorkspaceProps) {
   const [selectedId, setSelectedId] = useState<string>("group");
   const selectedSession = sessions.find((session) => session.id === selectedId);
+  const selectedProgressionSession = progressionSessions.find(
+    (session) => `progression:${session.id}` === selectedId,
+  );
   const recruitment = chat.recruitment;
   const canOpenGroup = chat.participants.length > 0;
 
@@ -38,8 +48,9 @@ export function NpcRecruitmentWorkspace({
 
   const title = useMemo(() => {
     if (selectedId === "group") return chat.title;
+    if (selectedProgressionSession) return "任务协商";
     return selectedSession ? `候选玩家 ${selectedSession.index + 1}` : "候选玩家";
-  }, [chat.title, selectedId, selectedSession]);
+  }, [chat.title, selectedId, selectedProgressionSession, selectedSession]);
 
   return (
     <div className="flex h-full min-h-0">
@@ -66,30 +77,56 @@ export function NpcRecruitmentWorkspace({
           </Button>
           {sessions.map((session) => {
             const participant = chat.participants.find((ai) => ai.id === session.resultAiId);
+            const progressionSession = progressionSessions.find(
+              (item) => item.aiId === session.resultAiId,
+            );
             return (
-              <Button
-                key={session.id}
-                type="button"
-                variant={selectedId === session.id ? "secondary" : "ghost"}
-                className="h-auto justify-start gap-2 rounded-md px-2 py-2"
-                onClick={() => setSelectedId(session.id)}
-              >
-                <SessionStatusIcon status={session.status} />
-                <span className="min-w-0 flex-1 truncate text-left">
-                  {participant?.faction
-                    ? `${participant.faction}｜${participant.name}`
-                    : `候选玩家 ${session.index + 1}`}
-                </span>
-                <span className="text-muted-foreground text-xs">
-                  {session.status === "completed"
-                    ? "已入群"
-                    : session.status === "failed"
-                      ? "失败"
-                      : session.status === "running"
-                        ? "创建中"
-                        : "排队"}
-                </span>
-              </Button>
+              <div key={session.id} className="grid gap-1">
+                <Button
+                  type="button"
+                  variant={selectedId === session.id ? "secondary" : "ghost"}
+                  className="h-auto justify-start gap-2 rounded-md px-2 py-2"
+                  onClick={() => setSelectedId(session.id)}
+                >
+                  <SessionStatusIcon status={session.status} />
+                  <span className="min-w-0 flex-1 truncate text-left">
+                    {participant?.faction
+                      ? `${participant.faction}｜${participant.name}`
+                      : `${session.targetFaction || "待定"}｜${session.roleNiche || `候选玩家 ${session.index + 1}`}`}
+                  </span>
+                  <span className="text-muted-foreground text-xs">
+                    {session.status === "completed"
+                      ? "已入群"
+                      : session.status === "failed"
+                        ? "失败"
+                        : session.status === "running"
+                          ? "创建中"
+                          : "排队"}
+                  </span>
+                </Button>
+                {progressionSession ? (
+                  <Button
+                    type="button"
+                    variant={
+                      selectedId === `progression:${progressionSession.id}` ? "secondary" : "ghost"
+                    }
+                    className="h-auto justify-start gap-2 rounded-md px-7 py-1.5 text-xs"
+                    onClick={() => setSelectedId(`progression:${progressionSession.id}`)}
+                  >
+                    <SessionStatusIcon status={progressionSession.status} />
+                    <span className="min-w-0 flex-1 truncate text-left">任务协商</span>
+                    <span className="text-muted-foreground">
+                      {progressionSession.status === "completed"
+                        ? "完成"
+                        : progressionSession.status === "failed"
+                          ? "失败"
+                          : progressionSession.status === "running"
+                            ? "进行中"
+                            : "排队"}
+                    </span>
+                  </Button>
+                ) : null}
+              </div>
             );
           })}
         </div>
@@ -126,6 +163,11 @@ export function NpcRecruitmentWorkspace({
                 候选玩家 {session.index + 1}
               </option>
             ))}
+            {progressionSessions.map((session) => (
+              <option key={session.id} value={`progression:${session.id}`}>
+                任务协商 {session.aiId}
+              </option>
+            ))}
           </select>
         </div>
         <div className="hidden h-12 shrink-0 items-center justify-between border-b px-4 md:flex">
@@ -143,6 +185,8 @@ export function NpcRecruitmentWorkspace({
             )
           ) : selectedSession ? (
             <NpcCreationChat session={selectedSession} />
+          ) : selectedProgressionSession ? (
+            <NpcProgressionChat session={selectedProgressionSession} />
           ) : (
             <WaitingRoom chat={chat} />
           )}
@@ -181,6 +225,21 @@ function NpcCreationChat({ session }: { session: NpcCreationSession }) {
         <div className="mb-4 flex items-center gap-2 text-sm">
           <BotIcon className="text-muted-foreground size-4" />
           <span className="font-medium">{session.personaTemplate}</span>
+        </div>
+        <div className="border-border bg-muted/30 mb-4 grid gap-1 rounded-md border px-3 py-2 text-xs">
+          <div>
+            <span className="text-muted-foreground">推荐阵营：</span>
+            {session.targetFaction || "无"}
+          </div>
+          <div>
+            <span className="text-muted-foreground">角色生态位：</span>
+            {session.roleNiche || "无"}
+          </div>
+          <div>
+            <span className="text-muted-foreground">差异化关键词：</span>
+            {session.reservedKeywords.join("、") || "无"}
+          </div>
+          <div className="text-muted-foreground">推荐方向是软约束，候选玩家仍需自己提出角色。</div>
         </div>
         <div className="grid gap-4">
           {session.messages.map((message) => (
@@ -232,7 +291,69 @@ function NpcCreationChat({ session }: { session: NpcCreationSession }) {
   );
 }
 
-function SessionStatusIcon({ status }: { status: NpcCreationSession["status"] }) {
+function NpcProgressionChat({ session }: { session: NpcProgressionSession }) {
+  return (
+    <div className="mx-auto flex h-full w-full max-w-3xl flex-col">
+      <div className="flex-1 overflow-y-auto px-4 py-5">
+        <div className="mb-4 flex items-center gap-2 text-sm">
+          <BotIcon className="text-muted-foreground size-4" />
+          <span className="font-medium">入群任务协商</span>
+        </div>
+        <div className="grid gap-4">
+          {session.messages.map((message) => (
+            <div
+              key={message.id}
+              className={cn(
+                "flex",
+                message.role === "npc"
+                  ? "justify-end"
+                  : message.role === "system"
+                    ? "justify-center"
+                    : "justify-start",
+              )}
+            >
+              {message.role === "system" ? (
+                <div className="bg-muted text-muted-foreground rounded-full px-3 py-1 text-xs">
+                  {message.content}
+                </div>
+              ) : (
+                <div
+                  className={cn(
+                    "max-w-[82%] rounded-2xl px-4 py-2 text-sm leading-relaxed whitespace-pre-line",
+                    message.role === "npc"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-foreground",
+                  )}
+                >
+                  <div className="mb-1 text-xs opacity-70">{message.name}</div>
+                  {message.content}
+                </div>
+              )}
+            </div>
+          ))}
+          {session.status === "running" ? (
+            <div className="text-muted-foreground flex items-center justify-center gap-2 text-xs">
+              <CircleDashedIcon className="size-3.5 animate-spin" />
+              任务协商进行中
+            </div>
+          ) : null}
+          {session.status === "failed" ? (
+            <div className="text-destructive flex items-center justify-center gap-2 text-xs">
+              <XCircleIcon className="size-3.5" />
+              {session.error ?? "任务协商失败"}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SessionStatusIcon({
+  status,
+}: {
+  status: NpcCreationSession["status"] | NpcProgressionSession["status"];
+}) {
   if (status === "completed") return <CheckCircle2Icon className="size-4 text-emerald-600" />;
   if (status === "failed") return <XCircleIcon className="text-destructive size-4" />;
   return <CircleDashedIcon className={cn("size-4", status === "running" && "animate-spin")} />;

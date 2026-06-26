@@ -41,6 +41,11 @@ const buildTopicHeader = (topicContext: TopicContext | undefined) => {
           (faction) =>
             `- ${faction.name}：${faction.currentScore}/${faction.victoryScore}；胜利条件：${faction.victoryCondition}；影响力：${faction.narrativeInfluence}`,
         ),
+        "属性模板：",
+        ...(roleplay.attributeSystem?.attributes ?? []).map(
+          (attribute) =>
+            `- ${attribute.name}：默认${attribute.defaultValue}；${attribute.description}`,
+        ),
       ]
         .filter(Boolean)
         .join("\n")
@@ -55,6 +60,29 @@ const buildTopicHeader = (topicContext: TopicContext | undefined) => {
     .join("\n");
 };
 
+const formatParticipantProgression = (participant: AiParticipant) =>
+  [
+    typeof participant.points === "number" ? `当前积分：${participant.points}` : undefined,
+    participant.status === "left" ? "状态：已离群" : undefined,
+    participant.personalGoal ? `个人目标：${participant.personalGoal}` : undefined,
+    participant.attributes?.length
+      ? `属性：${participant.attributes
+          .map((attribute) => `${attribute.name}${attribute.value}`)
+          .join("、")}`
+      : undefined,
+    participant.tasks?.length
+      ? `任务：${participant.tasks
+          .filter((task) => task.status === "open")
+          .map((task) => `${task.type === "faction" ? "阵营" : "个人"}-${task.title}`)
+          .join("；")}`
+      : undefined,
+    participant.inventory?.length
+      ? `道具：${participant.inventory.map((item) => item.name).join("、")}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
 const buildDialogSystemPrompt = (
   baseSystem: string | undefined,
   topicContext: TopicContext | undefined,
@@ -66,10 +94,16 @@ const buildDialogSystemPrompt = (
     parts.push(
       [
         `你正在与玩家进行一对一语C互动。你必须扮演：${participant.name}。`,
+        participant.realWorldPersona
+          ? `现实扮演者人设：${participant.realWorldPersona}`
+          : undefined,
         `角色定位：${participant.role}`,
+        participant.gamePersona ? `游戏内人设：${participant.gamePersona}` : undefined,
         participant.faction ? `所属阵营：${participant.faction}` : undefined,
+        formatParticipantProgression(participant),
         `角色提示词：${participant.systemPrompt}`,
         "回复要求：",
+        "- 现实扮演者人设只影响你的表达习惯、偏好和参与方式；默认不要主动暴露现实人设。",
         "- 始终保持该角色的口吻、视角和情绪一致性。",
         "- 直接回应玩家，不要跳出角色解释系统设定。",
         "- 可以主动推进互动，但不要替玩家做决定或代替玩家发言。",
@@ -93,9 +127,9 @@ const buildGroupSystemPrompt = (
   const roster = topicContext.chat.participants
     .map(
       (ai, index) =>
-        `${index + 1}. ${ai.name}（${ai.role}${ai.faction ? `｜${ai.faction}` : ""}）：${
-          ai.systemPrompt
-        }`,
+        `${index + 1}. ${ai.name}（${ai.role}${ai.faction ? `｜${ai.faction}` : ""}${
+          typeof ai.points === "number" ? `｜积分${ai.points}` : ""
+        }${ai.status === "left" ? "｜已离群" : ""}）：${ai.systemPrompt}`,
     )
     .join("\n");
   const parts = [baseSystem?.trim(), buildTopicHeader(topicContext)].filter(Boolean) as string[];
@@ -105,8 +139,13 @@ const buildGroupSystemPrompt = (
       "你正在参与一个多 AI 角色群聊，所有角色都与玩家进行语C互动。",
       "本次只输出你当前角色的一段回复，不要替其他角色发言。",
       `当前轮到你扮演：${participant.name}。`,
+      participant.realWorldPersona
+        ? `你的现实扮演者人设：${participant.realWorldPersona}`
+        : undefined,
       `你的角色定位：${participant.role}`,
+      participant.gamePersona ? `你的游戏内人设：${participant.gamePersona}` : undefined,
       participant.faction ? `你的阵营：${participant.faction}` : undefined,
+      formatParticipantProgression(participant),
       `你的角色提示词：${participant.systemPrompt}`,
       "群聊角色顺序：",
       roster,
@@ -115,6 +154,7 @@ const buildGroupSystemPrompt = (
       "输出要求：",
       `- 必须使用 \`**${participant.name}**\` 开头。`,
       "- 只回复一段，观点要承接玩家和前序角色。",
+      "- 现实扮演者人设只影响你的表达习惯、偏好和参与方式；默认不要主动暴露现实人设。",
       "- 始终保持你自己的口吻、视角和情绪一致性。",
       "- 如果你有阵营，发言要体现阵营利益、胜利目标、盟友/敌对关系和当前分数压力。",
       "- 不要解释你在模拟群聊，不要替玩家发言。",

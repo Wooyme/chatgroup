@@ -10,14 +10,20 @@ import {
   type ChatSession,
   type FactionScoreDelta,
   type FactionScoreEvent,
+  type InventoryItem,
   type NpcCreationMessage,
   type NpcCreationSession,
   type NpcCreationStatus,
+  type NpcProgressionMessage,
+  type NpcProgressionSession,
+  type NpcProgressionStatus,
+  type NpcTask,
   type RecruitmentEvent,
   type RoleplayTopicProfile,
   type StoredMessageRow,
   type Topic,
 } from "@/lib/chat-types";
+import { createCharacterAttributes } from "@/lib/attribute-templates";
 import {
   DEFAULT_AI_PROVIDER,
   DEFAULT_OPENROUTER_MODEL_ID,
@@ -29,6 +35,7 @@ type WorkspaceState = {
   ais: Record<string, AiParticipant>;
   chats: Record<string, ChatSession>;
   npcCreationSessions: Record<string, NpcCreationSession>;
+  npcProgressionSessions: Record<string, NpcProgressionSession>;
   messages: Record<string, StoredMessageRow[]>;
   activeTopicId: string;
   activeChatId: string;
@@ -42,18 +49,8 @@ type WorkspaceState = {
   createTopic: (title?: string) => string;
   renameTopic: (topicId: string, title: string) => void;
   deleteTopic: (topicId: string) => void;
-  createAi: (
-    topicId: string,
-    input?: Partial<
-      Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
-    >,
-  ) => string;
-  updateAi: (
-    aiId: string,
-    input: Partial<
-      Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
-    >,
-  ) => void;
+  createAi: (topicId: string, input?: AiParticipantInput) => string;
+  updateAi: (aiId: string, input: AiParticipantInput) => void;
   deleteAi: (aiId: string) => void;
   createChat: (
     topicId: string,
@@ -63,13 +60,7 @@ type WorkspaceState = {
   ) => string;
   renameChat: (chatId: string, title: string) => void;
   deleteChat: (chatId: string) => void;
-  createAiAndJoinChat: (
-    topicId: string,
-    chatId: string,
-    input: Partial<
-      Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
-    >,
-  ) => string;
+  createAiAndJoinChat: (topicId: string, chatId: string, input: AiParticipantInput) => string;
   appendRecruitmentEvent: (
     chatId: string,
     event: Pick<RecruitmentEvent, "message" | "status" | "sessionId">,
@@ -79,13 +70,26 @@ type WorkspaceState = {
     message: Pick<NpcCreationMessage, "role" | "name" | "content">,
   ) => void;
   setNpcCreationStatus: (sessionId: string, status: NpcCreationStatus, error?: string) => void;
-  completeNpcCreationSession: (
-    sessionId: string,
-    input: Partial<
-      Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
-    >,
-  ) => string;
+  incrementNpcCreationRevision: (sessionId: string) => void;
+  completeNpcCreationSession: (sessionId: string, input: AiParticipantInput) => string;
   failNpcCreationSession: (sessionId: string, error: string) => void;
+  appendNpcProgressionMessage: (
+    sessionId: string,
+    message: Pick<NpcProgressionMessage, "role" | "name" | "content">,
+  ) => void;
+  setNpcProgressionStatus: (
+    sessionId: string,
+    status: NpcProgressionStatus,
+    error?: string,
+  ) => void;
+  completeNpcProgressionSession: (
+    sessionId: string,
+    input: { tasks: NpcTask[]; personalGoal: string },
+  ) => void;
+  failNpcProgressionSession: (sessionId: string, error: string) => void;
+  completeNpcTask: (aiId: string, taskId: string) => void;
+  enhanceNpcAttribute: (aiId: string, attributeId: string) => void;
+  buyNpcShopItem: (aiId: string, item: Pick<InventoryItem, "name" | "description">) => void;
   applyFactionScoreEvent: (
     chatId: string,
     input: {
@@ -102,6 +106,27 @@ type WorkspaceState = {
   deleteChatMessages: (chatId: string, ids: string[]) => void;
 };
 
+type AiParticipantInput = Partial<
+  Pick<
+    AiParticipant,
+    | "name"
+    | "role"
+    | "faction"
+    | "realWorldPersona"
+    | "gamePersona"
+    | "points"
+    | "status"
+    | "attributes"
+    | "tasks"
+    | "personalGoal"
+    | "inventory"
+    | "progressionSessionId"
+    | "systemPrompt"
+    | "modelId"
+    | "modelName"
+  >
+>;
+
 const AI_COLORS = [
   "bg-sky-500",
   "bg-emerald-500",
@@ -110,6 +135,24 @@ const AI_COLORS = [
   "bg-violet-500",
   "bg-cyan-500",
 ];
+
+const ROLE_NICHES = [
+  { name: "外交", keywords: ["使节", "谈判", "盟约", "外务"] },
+  { name: "军事", keywords: ["军官", "骑士", "将领", "护卫"] },
+  { name: "宗教", keywords: ["祭司", "神官", "信徒", "圣职"] },
+  { name: "情报", keywords: ["密探", "间谍", "线人", "调查"] },
+  { name: "商业", keywords: ["商人", "财团", "贸易", "行会"] },
+  { name: "学术", keywords: ["学者", "法师", "研究", "档案"] },
+  { name: "民间", keywords: ["平民", "工匠", "记者", "组织者"] },
+  { name: "边境", keywords: ["边境", "游侠", "流亡", "佣兵"] },
+  { name: "反叛", keywords: ["叛军", "革命", "地下", "异见"] },
+  { name: "宫廷", keywords: ["贵族", "侍从", "顾问", "内廷"] },
+];
+
+const NPC_INITIAL_POINTS = 10;
+const NPC_DIALOG_COST = 2;
+const NPC_ATTRIBUTE_UPGRADE_COST = 5;
+const NPC_SHOP_ITEM_COST = 3;
 
 const makeId = (prefix: string) =>
   `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -124,16 +167,20 @@ const cloneDefaultAis = () => {
   }));
 };
 
-const createAiParticipant = (
-  input?: Partial<
-    Pick<AiParticipant, "name" | "role" | "faction" | "systemPrompt" | "modelId" | "modelName">
-  >,
-  index = 0,
-): AiParticipant => ({
+const createAiParticipant = (input?: AiParticipantInput, index = 0): AiParticipant => ({
   id: makeId("ai"),
   name: input?.name?.trim() || "新角色",
   role: input?.role?.trim() || "待设定的人设",
   ...(input?.faction?.trim() && { faction: input.faction.trim() }),
+  ...(input?.realWorldPersona?.trim() && { realWorldPersona: input.realWorldPersona.trim() }),
+  ...(input?.gamePersona?.trim() && { gamePersona: input.gamePersona.trim() }),
+  ...(typeof input?.points === "number" && { points: input.points }),
+  ...(input?.status && { status: input.status }),
+  ...(input?.attributes && { attributes: input.attributes }),
+  ...(input?.tasks && { tasks: input.tasks }),
+  ...(input?.personalGoal?.trim() && { personalGoal: input.personalGoal.trim() }),
+  ...(input?.inventory && { inventory: input.inventory }),
+  ...(input?.progressionSessionId && { progressionSessionId: input.progressionSessionId }),
   systemPrompt: input?.systemPrompt?.trim() || "按照人设进行语C互动，保持角色口吻，主动回应玩家。",
   color: AI_COLORS[index % AI_COLORS.length]!,
   provider: DEFAULT_AI_PROVIDER,
@@ -144,6 +191,34 @@ const createAiParticipant = (
       ? DEFAULT_OPENROUTER_MODEL_NAME
       : undefined),
 });
+
+const isActiveParticipant = (participant: AiParticipant) => participant.status !== "left";
+
+const withPointDelta = (participant: AiParticipant, delta: number): AiParticipant => {
+  if (typeof participant.points !== "number") return participant;
+  const points = Math.max(0, participant.points + delta);
+  return {
+    ...participant,
+    points,
+    status: points === 0 ? "left" : (participant.status ?? "active"),
+  };
+};
+
+const updateParticipantEverywhere = (
+  chats: Record<string, ChatSession>,
+  participant: AiParticipant,
+) =>
+  Object.fromEntries(
+    Object.entries(chats).map(([chatId, chat]) => [
+      chatId,
+      {
+        ...chat,
+        participants: chat.participants.map((item) =>
+          item.id === participant.id ? { ...participant } : item,
+        ),
+      },
+    ]),
+  );
 
 const createChatSession = (
   topicId: string,
@@ -208,6 +283,8 @@ const createNpcCreationSession = (
   groupChatId: string,
   index: number,
   personaTemplate: string,
+  targetFaction: string | undefined,
+  roleNiche: (typeof ROLE_NICHES)[number],
 ): NpcCreationSession => {
   const timestamp = now();
   return {
@@ -217,12 +294,23 @@ const createNpcCreationSession = (
     index,
     status: "queued",
     personaTemplate,
+    ...(targetFaction && { targetFaction }),
+    roleNiche: roleNiche.name,
+    reservedKeywords: roleNiche.keywords,
+    revisionCount: 0,
     messages: [
       {
         id: makeId("npc_msg"),
         role: "system",
         name: "系统",
-        content: `已为候选玩家 ${index + 1} 分配扮演者人设：${personaTemplate}`,
+        content: [
+          `已为候选玩家 ${index + 1} 分配扮演者人设：${personaTemplate}`,
+          targetFaction ? `推荐阵营倾向：${targetFaction}` : undefined,
+          `推荐角色生态位：${roleNiche.name}`,
+          "这些是软约束，不是指定角色；候选玩家仍需自己提出角色。",
+        ]
+          .filter(Boolean)
+          .join("\n"),
         createdAt: timestamp,
       },
     ],
@@ -230,6 +318,41 @@ const createNpcCreationSession = (
     updatedAt: timestamp,
   };
 };
+
+const createNpcProgressionSession = (
+  topicId: string,
+  groupChatId: string,
+  ai: AiParticipant,
+): NpcProgressionSession => {
+  const timestamp = now();
+  return {
+    id: makeId("npc_progression"),
+    topicId,
+    groupChatId,
+    aiId: ai.id,
+    status: "queued",
+    messages: [
+      {
+        id: makeId("npc_prog_msg"),
+        role: "system",
+        name: "系统",
+        content: `已为 ${ai.name} 开启入群后的阵营任务和个人目标协商。`,
+        createdAt: timestamp,
+      },
+    ],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+};
+
+const createInventoryItem = (
+  input: Pick<InventoryItem, "name" | "description">,
+): InventoryItem => ({
+  id: makeId("item"),
+  name: input.name,
+  description: input.description,
+  createdAt: now(),
+});
 
 const getNextRecruitment = (
   recruitment: ChatRecruitment,
@@ -275,6 +398,7 @@ const createInitialState = () => {
     chats: { [chat.id]: chat },
     messages: { [chat.id]: [] },
     npcCreationSessions: {},
+    npcProgressionSessions: {},
     activeTopicId: topicId,
     activeChatId: chat.id,
   };
@@ -295,7 +419,9 @@ const selectParticipants = (
   mode: ChatMode,
 ) => {
   const ids = participantIds?.length ? participantIds : topic.aiIds;
-  const participants = ids.map((id) => ais[id]).filter((ai): ai is AiParticipant => Boolean(ai));
+  const participants = ids
+    .map((id) => ais[id])
+    .filter((ai): ai is AiParticipant => Boolean(ai) && isActiveParticipant(ai));
 
   if (mode === "dialog") return participants.slice(0, 1);
   return participants.length > 0 ? participants : topic.aiIds.map((id) => ais[id]).filter(Boolean);
@@ -309,8 +435,16 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         const timestamp = now();
         const topicId = makeId("topic");
         const chatId = makeId("chat");
+        const factionNames = roleplay.factionSystem.factions.map((faction) => faction.name);
         const sessions = personaTemplates.map((persona, index) =>
-          createNpcCreationSession(topicId, chatId, index, persona),
+          createNpcCreationSession(
+            topicId,
+            chatId,
+            index,
+            persona,
+            factionNames[index % Math.max(factionNames.length, 1)],
+            ROLE_NICHES[index % ROLE_NICHES.length]!,
+          ),
         );
         const recruitment: ChatRecruitment = {
           status: "running",
@@ -426,6 +560,11 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
               ([, session]) => session.topicId !== topicId,
             ),
           );
+          const npcProgressionSessions = Object.fromEntries(
+            Object.entries(state.npcProgressionSessions).filter(
+              ([, session]) => session.topicId !== topicId,
+            ),
+          );
 
           const remainingTopicId = Object.keys(topics)[0];
           if (!remainingTopicId) return createInitialState();
@@ -435,6 +574,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             ais,
             chats,
             npcCreationSessions,
+            npcProgressionSessions,
             messages,
             activeTopicId: remainingTopicId,
             activeChatId,
@@ -469,6 +609,17 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             ...(input.name?.trim() && { name: input.name.trim() }),
             ...(input.role?.trim() && { role: input.role.trim() }),
             ...(input.faction?.trim() && { faction: input.faction.trim() }),
+            ...(input.realWorldPersona?.trim() && {
+              realWorldPersona: input.realWorldPersona.trim(),
+            }),
+            ...(input.gamePersona?.trim() && { gamePersona: input.gamePersona.trim() }),
+            ...(typeof input.points === "number" && { points: input.points }),
+            ...(input.status && { status: input.status }),
+            ...(input.attributes && { attributes: input.attributes }),
+            ...(input.tasks && { tasks: input.tasks }),
+            ...(input.personalGoal?.trim() && { personalGoal: input.personalGoal.trim() }),
+            ...(input.inventory && { inventory: input.inventory }),
+            ...(input.progressionSessionId && { progressionSessionId: input.progressionSessionId }),
             ...(input.systemPrompt?.trim() && {
               systemPrompt: input.systemPrompt.trim(),
             }),
@@ -478,7 +629,10 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
               modelName: input.modelName?.trim() || input.modelId.trim(),
             }),
           };
-          return { ais: { ...state.ais, [aiId]: nextAi } };
+          return {
+            ais: { ...state.ais, [aiId]: nextAi },
+            chats: updateParticipantEverywhere(state.chats, nextAi),
+          };
         });
       },
       deleteAi: (aiId) => {
@@ -498,8 +652,24 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         const state = get();
         const topic = state.topics[topicId];
         if (!topic) return "";
-        const participants = selectParticipants(topic, state.ais, participantIds, mode);
+        let participants = selectParticipants(topic, state.ais, participantIds, mode);
         if (participants.length === 0) return "";
+        let nextAis = state.ais;
+        let nextChats = state.chats;
+
+        if (mode === "dialog") {
+          const participant = participants[0]!;
+          if (typeof participant.points === "number" && participant.points < NPC_DIALOG_COST) {
+            return "";
+          }
+          const chargedParticipant = withPointDelta(participant, -NPC_DIALOG_COST);
+          participants = [chargedParticipant];
+          if (chargedParticipant !== participant) {
+            nextAis = { ...state.ais, [chargedParticipant.id]: chargedParticipant };
+            nextChats = updateParticipantEverywhere(state.chats, chargedParticipant);
+          }
+        }
+
         const chat = createChatSession(topicId, mode, participants, title);
         set((current) => ({
           topics: {
@@ -510,7 +680,8 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
               updatedAt: now(),
             },
           },
-          chats: { ...current.chats, [chat.id]: chat },
+          ais: nextAis,
+          chats: { ...nextChats, [chat.id]: chat },
           messages: { ...current.messages, [chat.id]: [] },
           activeTopicId: topicId,
           activeChatId: chat.id,
@@ -656,18 +827,54 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           };
         });
       },
+      incrementNpcCreationRevision: (sessionId) => {
+        set((state) => {
+          const session = state.npcCreationSessions[sessionId];
+          if (!session) return state;
+          return {
+            npcCreationSessions: {
+              ...state.npcCreationSessions,
+              [sessionId]: {
+                ...session,
+                revisionCount: session.revisionCount + 1,
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
       completeNpcCreationSession: (sessionId, input) => {
         const state = get();
         const session = state.npcCreationSessions[sessionId];
         if (!session || session.status === "completed") return session?.resultAiId ?? "";
-        const aiId = get().createAiAndJoinChat(session.topicId, session.groupChatId, input);
+        const topic = state.topics[session.topicId];
+        const fallbackAttributes = topic?.roleplay
+          ? createCharacterAttributes(topic.roleplay.attributeSystem.attributes)
+          : undefined;
+        const aiId = get().createAiAndJoinChat(session.topicId, session.groupChatId, {
+          ...input,
+          realWorldPersona: input.realWorldPersona || session.personaTemplate,
+          points: typeof input.points === "number" ? input.points : NPC_INITIAL_POINTS,
+          status: input.status ?? "active",
+          attributes: input.attributes ?? fallbackAttributes,
+          tasks: input.tasks ?? [],
+          inventory: input.inventory ?? [],
+        });
         if (!aiId) return "";
         set((current) => {
           const latestSession = current.npcCreationSessions[sessionId];
           const chat = current.chats[session.groupChatId];
-          if (!latestSession || !chat?.recruitment) return current;
+          const ai = current.ais[aiId];
+          if (!latestSession || !chat?.recruitment || !ai) return current;
+          const progression = createNpcProgressionSession(session.topicId, session.groupChatId, ai);
+          const aiWithProgression = { ...ai, progressionSessionId: progression.id };
           const recruitment = getNextRecruitment(chat.recruitment, 1, 0);
+          const chatsWithAi = updateParticipantEverywhere(current.chats, aiWithProgression);
           return {
+            ais: {
+              ...current.ais,
+              [aiId]: aiWithProgression,
+            },
             npcCreationSessions: {
               ...current.npcCreationSessions,
               [sessionId]: {
@@ -677,10 +884,14 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
                 updatedAt: now(),
               },
             },
+            npcProgressionSessions: {
+              ...current.npcProgressionSessions,
+              [progression.id]: progression,
+            },
             chats: {
-              ...current.chats,
+              ...chatsWithAi,
               [session.groupChatId]: {
-                ...chat,
+                ...chatsWithAi[session.groupChatId]!,
                 recruitment: {
                   ...recruitment,
                   events: [
@@ -736,6 +947,151 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
                 updatedAt: now(),
               },
             },
+          };
+        });
+      },
+      appendNpcProgressionMessage: (sessionId, message) => {
+        set((state) => {
+          const session = state.npcProgressionSessions[sessionId];
+          if (!session) return state;
+          return {
+            npcProgressionSessions: {
+              ...state.npcProgressionSessions,
+              [sessionId]: {
+                ...session,
+                messages: [
+                  ...session.messages,
+                  {
+                    id: makeId("npc_prog_msg"),
+                    role: message.role,
+                    name: message.name,
+                    content: message.content,
+                    createdAt: now(),
+                  },
+                ],
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
+      setNpcProgressionStatus: (sessionId, status, error) => {
+        set((state) => {
+          const session = state.npcProgressionSessions[sessionId];
+          if (!session) return state;
+          return {
+            npcProgressionSessions: {
+              ...state.npcProgressionSessions,
+              [sessionId]: {
+                ...session,
+                status,
+                ...(error && { error }),
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
+      completeNpcProgressionSession: (sessionId, input) => {
+        set((state) => {
+          const session = state.npcProgressionSessions[sessionId];
+          if (!session) return state;
+          const ai = state.ais[session.aiId];
+          if (!ai) return state;
+          const nextAi = {
+            ...ai,
+            tasks: input.tasks,
+            personalGoal: input.personalGoal,
+          };
+          return {
+            ais: { ...state.ais, [ai.id]: nextAi },
+            chats: updateParticipantEverywhere(state.chats, nextAi),
+            npcProgressionSessions: {
+              ...state.npcProgressionSessions,
+              [sessionId]: {
+                ...session,
+                status: "completed",
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
+      failNpcProgressionSession: (sessionId, error) => {
+        set((state) => {
+          const session = state.npcProgressionSessions[sessionId];
+          if (!session || session.status === "failed" || session.status === "completed") {
+            return state;
+          }
+          return {
+            npcProgressionSessions: {
+              ...state.npcProgressionSessions,
+              [sessionId]: {
+                ...session,
+                status: "failed",
+                error,
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
+      completeNpcTask: (aiId, taskId) => {
+        set((state) => {
+          const ai = state.ais[aiId];
+          const task = ai?.tasks?.find((item) => item.id === taskId);
+          if (!ai || !task || task.status === "completed") return state;
+          const nextAi = withPointDelta(
+            {
+              ...ai,
+              tasks: (ai.tasks ?? []).map((item) =>
+                item.id === taskId ? { ...item, status: "completed" as const } : item,
+              ),
+            },
+            task.rewardPoints,
+          );
+          return {
+            ais: { ...state.ais, [aiId]: nextAi },
+            chats: updateParticipantEverywhere(state.chats, nextAi),
+          };
+        });
+      },
+      enhanceNpcAttribute: (aiId, attributeId) => {
+        set((state) => {
+          const ai = state.ais[aiId];
+          if (!ai?.attributes || typeof ai.points !== "number") return state;
+          if (ai.points < NPC_ATTRIBUTE_UPGRADE_COST) return state;
+          const nextAi = withPointDelta(
+            {
+              ...ai,
+              attributes: ai.attributes.map((attribute) =>
+                attribute.id === attributeId
+                  ? { ...attribute, value: attribute.value + 1 }
+                  : attribute,
+              ),
+            },
+            -NPC_ATTRIBUTE_UPGRADE_COST,
+          );
+          return {
+            ais: { ...state.ais, [aiId]: nextAi },
+            chats: updateParticipantEverywhere(state.chats, nextAi),
+          };
+        });
+      },
+      buyNpcShopItem: (aiId, item) => {
+        set((state) => {
+          const ai = state.ais[aiId];
+          if (!ai || typeof ai.points !== "number" || ai.points < NPC_SHOP_ITEM_COST) return state;
+          const nextAi = withPointDelta(
+            {
+              ...ai,
+              inventory: [...(ai.inventory ?? []), createInventoryItem(item)],
+            },
+            -NPC_SHOP_ITEM_COST,
+          );
+          return {
+            ais: { ...state.ais, [aiId]: nextAi },
+            chats: updateParticipantEverywhere(state.chats, nextAi),
           };
         });
       },

@@ -2,12 +2,20 @@
 
 import { useEffect, useRef } from "react";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
-import type { AiParticipant, ChatSession, NpcCreationSession, Topic } from "@/lib/chat-types";
+import type {
+  AiParticipant,
+  CharacterAttribute,
+  ChatSession,
+  NpcCreationSession,
+  Topic,
+} from "@/lib/chat-types";
 
 type NpcFinalResult = {
   name: string;
   role: string;
   faction: string;
+  gamePersona: string;
+  attributes: CharacterAttribute[];
   systemPrompt: string;
   introMessage?: string;
   creationSummary?: string;
@@ -106,24 +114,41 @@ async function runNpcCreationSession(sessionId: string) {
       });
     }
 
-    const latest = getNpcCreationContext(sessionId);
-    if (!latest) return;
-    const finalText = await requestText(
-      buildDmSystemPrompt(latest.topic),
-      buildFinalPrompt(latest.topic, latest.chat, latest.session),
-    );
-    const result = normalizeNpcFinalResult(finalText, latest.topic, latest.session);
-    useChatWorkspaceStore.getState().appendNpcCreationMessage(sessionId, {
-      role: "dm",
-      name: "主持人",
-      content: `创建完成：${result.name}（${result.role}）\n${result.creationSummary ?? ""}`.trim(),
-    });
-    useChatWorkspaceStore.getState().completeNpcCreationSession(sessionId, {
-      name: result.name,
-      role: result.role,
-      faction: result.faction,
-      systemPrompt: result.systemPrompt,
-    });
+    for (;;) {
+      const latest = getNpcCreationContext(sessionId);
+      if (!latest) return;
+      const finalText = await requestText(
+        buildDmSystemPrompt(latest.topic),
+        buildFinalPrompt(latest.topic, latest.chat, latest.session),
+      );
+      const result = normalizeNpcFinalResult(finalText, latest.topic, latest.session);
+      const conflict = detectNpcConflict(result, latest.chat, latest.session);
+      if (conflict && latest.session.revisionCount < 2) {
+        await requestNpcRevision(latest.session.id, conflict);
+        continue;
+      }
+      useChatWorkspaceStore.getState().appendNpcCreationMessage(sessionId, {
+        role: "dm",
+        name: "主持人",
+        content: `创建完成：${result.name}（${result.role}｜${result.faction || "无阵营"}）\n${
+          conflict ? `相似风险：${conflict}\n` : ""
+        }${result.creationSummary ?? ""}`.trim(),
+      });
+      useChatWorkspaceStore.getState().completeNpcCreationSession(sessionId, {
+        name: result.name,
+        role: result.role,
+        faction: result.faction,
+        realWorldPersona: latest.session.personaTemplate,
+        gamePersona: result.gamePersona,
+        points: 10,
+        status: "active",
+        attributes: result.attributes,
+        tasks: [],
+        inventory: [],
+        systemPrompt: result.systemPrompt,
+      });
+      break;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "未知错误";
     useChatWorkspaceStore.getState().failNpcCreationSession(sessionId, message);
@@ -168,6 +193,11 @@ function buildRoleplaySummary(topic: Topic) {
       (faction) =>
         `- ${faction.name}：${faction.description}；强度${faction.strength}；分数${faction.currentScore}/${faction.victoryScore}；胜利条件：${faction.victoryCondition}；叙事影响力：${faction.narrativeInfluence}`,
     ),
+    "属性模板：",
+    ...roleplay.attributeSystem.attributes.map(
+      (attribute) =>
+        `- id=${attribute.id} ${attribute.name}：默认${attribute.defaultValue}；${attribute.description}`,
+    ),
     `群主角色：${roleplay.playerRole}`,
     `群主风评：${roleplay.reputation}`,
     `补充设定：${roleplay.notes || "无"}`,
@@ -190,6 +220,107 @@ function formatOccupiedRoles(chat: ChatSession) {
     .join("\n");
 }
 
+async function requestNpcRevision(sessionId: string, conflict: string) {
+  const latest = getNpcCreationContext(sessionId);
+  if (!latest) return;
+  useChatWorkspaceStore.getState().incrementNpcCreationRevision(sessionId);
+  useChatWorkspaceStore.getState().appendNpcCreationMessage(sessionId, {
+    role: "dm",
+    name: "主持人",
+    content: [
+      `这个方案需要修正：${conflict}`,
+      "请候选玩家自己提出一个更有区分度的调整方案。",
+      "注意：我不会直接指定你扮演谁，你需要自己保留核心兴趣并避开冲突。",
+    ].join("\n"),
+  });
+
+  const afterDm = getNpcCreationContext(sessionId);
+  if (!afterDm) return;
+  const npcMessage = await requestText(
+    buildNpcSystemPrompt(afterDm.session),
+    buildNpcTurnPrompt(afterDm.topic, afterDm.chat, afterDm.session),
+  );
+  useChatWorkspaceStore.getState().appendNpcCreationMessage(sessionId, {
+    role: "npc",
+    name: `候选玩家 ${afterDm.session.index + 1}`,
+    content: npcMessage,
+  });
+}
+
+function detectNpcConflict(result: NpcFinalResult, chat: ChatSession, session: NpcCreationSession) {
+  const normalizedName = normalizeText(result.name);
+  const normalizedRole = normalizeText(result.role);
+  const similarParticipant = chat.participants.find((participant) => {
+    const participantName = normalizeText(participant.name);
+    const participantRole = normalizeText(participant.role);
+    const hasSimilarName =
+      Boolean(normalizedName && participantName) &&
+      (normalizedName === participantName ||
+        normalizedName.includes(participantName) ||
+        participantName.includes(normalizedName));
+    const hasSimilarRole = roleSimilarity(normalizedRole, participantRole) >= 0.45;
+    return hasSimilarName || hasSimilarRole;
+  });
+  if (similarParticipant) {
+    return `和已入群角色「${similarParticipant.name}（${similarParticipant.role}）」过于接近，需要换一个身份层次、职业功能或关系位置。`;
+  }
+
+  const factionCounts = new Map<string, number>();
+  for (const participant of chat.participants) {
+    if (participant.faction) {
+      factionCounts.set(participant.faction, (factionCounts.get(participant.faction) ?? 0) + 1);
+    }
+  }
+  if (result.faction) {
+    factionCounts.set(result.faction, (factionCounts.get(result.faction) ?? 0) + 1);
+  }
+  const counts = Array.from(factionCounts.values());
+  const minCount = counts.length > 0 ? Math.min(...counts) : 0;
+  const resultFactionCount = result.faction ? (factionCounts.get(result.faction) ?? 0) : 0;
+  if (
+    session.targetFaction &&
+    result.faction &&
+    result.faction !== session.targetFaction &&
+    resultFactionCount > minCount + 1
+  ) {
+    return `阵营「${result.faction}」已经明显偏多，本候选原本更适合补足「${session.targetFaction}」或给出更强理由。`;
+  }
+
+  return "";
+}
+
+function normalizeText(value: string) {
+  return value.replace(/[^\p{Script=Han}a-zA-Z0-9]/gu, "").toLowerCase();
+}
+
+function roleSimilarity(left: string, right: string) {
+  if (!left || !right) return 0;
+  const leftTokens = new Set(makeBigrams(left));
+  const rightTokens = new Set(makeBigrams(right));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return intersection / union;
+}
+
+function makeBigrams(value: string) {
+  if (value.length <= 2) return value ? [value] : [];
+  return Array.from({ length: value.length - 1 }, (_, index) => value.slice(index, index + 2));
+}
+
+function formatInFlightSessions(session: NpcCreationSession) {
+  const state = useChatWorkspaceStore.getState();
+  return Object.values(state.npcCreationSessions)
+    .filter((item) => item.groupChatId === session.groupChatId && item.id !== session.id)
+    .map(
+      (item) =>
+        `- 候选玩家${item.index + 1}：状态=${item.status}；推荐阵营=${
+          item.targetFaction || "无"
+        }；生态位=${item.roleNiche || "无"}；关键词=${item.reservedKeywords.join("、")}`,
+    )
+    .join("\n");
+}
+
 function buildDmSystemPrompt(topic: Topic) {
   return [
     "你是中文语C群的主持人/DM，正在帮新成员创建入群角色。",
@@ -197,6 +328,7 @@ function buildDmSystemPrompt(topic: Topic) {
     "你必须围绕群世界观和群主角色进行把关。",
     "你可以要求更多细节，可以指出世界观冲突，也可以指出角色离群主太远、不方便互动。",
     "你必须让候选玩家最终选择一个现有阵营，不能自创阵营。",
+    "你不能直接指定候选玩家扮演某个具体角色；你只能给约束、指出冲突、要求候选玩家自己修正。",
     "不要说自己是 AI。",
     "群设定：",
     buildRoleplaySummary(topic),
@@ -209,7 +341,16 @@ function buildNpcSystemPrompt(session: NpcCreationSession) {
     "你不是最终游戏角色本人，而是在和主持人商量自己要扮演什么角色。",
     "你说话像 IM，不写小说正文，不要说自己是 AI。",
     "你要认真配合主持人的要求，选择一个符合世界观、方便和群主互动、能长期参与的角色。",
-  ].join("\n");
+    session.targetFaction
+      ? `系统给你的推荐阵营倾向是「${session.targetFaction}」，这不是强制，但优先考虑。`
+      : undefined,
+    session.roleNiche ? `系统给你的推荐角色生态位是「${session.roleNiche}」。` : undefined,
+    session.reservedKeywords.length > 0
+      ? `尽量围绕这些差异化关键词构思，但不要机械照抄：${session.reservedKeywords.join("、")}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildDmTurnPrompt(
@@ -221,7 +362,11 @@ function buildDmTurnPrompt(
   const firstTurn = cycle === 0;
   return [
     `候选玩家现实人设：${session.personaTemplate}`,
+    `推荐阵营倾向：${session.targetFaction || "无"}`,
+    `推荐角色生态位：${session.roleNiche || "无"}`,
+    `差异化关键词：${session.reservedKeywords.join("、") || "无"}`,
     `已占用角色：\n${formatOccupiedRoles(chat)}`,
+    `其他并行创建中的候选：\n${formatInFlightSessions(session) || "暂无。"}`,
     `创建对话记录：\n${formatNpcCreationHistory(session) || "暂无。"}`,
     firstTurn
       ? "请作为主持人欢迎这个新成员，向他介绍本群正在进行的世界观，并请他先提出想扮演的角色。"
@@ -234,7 +379,11 @@ function buildDmTurnPrompt(
 function buildNpcTurnPrompt(topic: Topic, chat: ChatSession, session: NpcCreationSession) {
   return [
     `群设定：\n${buildRoleplaySummary(topic)}`,
+    `推荐阵营倾向：${session.targetFaction || "无"}`,
+    `推荐角色生态位：${session.roleNiche || "无"}`,
+    `差异化关键词：${session.reservedKeywords.join("、") || "无"}`,
     `已占用角色：\n${formatOccupiedRoles(chat)}`,
+    `其他并行创建中的候选：\n${formatInFlightSessions(session) || "暂无。"}`,
     `创建对话记录：\n${formatNpcCreationHistory(session)}`,
     "请以候选玩家身份回复主持人的最后一条消息。你可以提出想扮演的角色、补充细节、接受修改或解释自己为什么适合这个群。",
     "只输出一条 IM 消息，不要输出旁白。",
@@ -245,11 +394,15 @@ function buildFinalPrompt(topic: Topic, chat: ChatSession, session: NpcCreationS
   return [
     "请作为主持人总结这个候选玩家最终入群角色。",
     `群设定：\n${buildRoleplaySummary(topic)}`,
+    `推荐阵营倾向：${session.targetFaction || "无"}`,
+    `推荐角色生态位：${session.roleNiche || "无"}`,
+    `差异化关键词：${session.reservedKeywords.join("、") || "无"}`,
     `已占用角色：\n${formatOccupiedRoles(chat)}`,
+    `其他并行创建中的候选：\n${formatInFlightSessions(session) || "暂无。"}`,
     `创建对话记录：\n${formatNpcCreationHistory(session)}`,
     "必须返回严格 JSON，不要 Markdown，不要解释。",
     "JSON 字段：",
-    '{"name":"角色在群里的称呼，2到6个中文字符","role":"一句话角色身份","faction":"必须是现有阵营名之一","systemPrompt":"给主群聊天模型使用的人设提示词，必须只扮演最终角色，持续体现阵营利益、盟友/敌对关系和胜利目标，不暴露现实玩家人设和创建过程","introMessage":"入群第一句 IM 式招呼","creationSummary":"主持人对角色适配性和阵营归属的简短总结"}',
+    '{"name":"角色在群里的称呼，2到6个中文字符","role":"一句话角色身份","faction":"必须是现有阵营名之一","gamePersona":"这个 NPC 在语C游戏中的完整人设，包含身份、目标、关系位置和长期动机","attributes":[{"id":"必须使用属性模板中的 id","value":数字}],"systemPrompt":"给主群聊天模型使用的人设提示词，必须同时保存现实扮演者人设和游戏角色人设，持续体现阵营利益、盟友/敌对关系和胜利目标","introMessage":"入群第一句 IM 式招呼","creationSummary":"主持人对角色适配性和阵营归属的简短总结"}',
   ].join("\n\n");
 }
 
@@ -268,15 +421,19 @@ function normalizeNpcFinalResult(
     ? parsedFaction
     : (availableFactions[session.index % Math.max(availableFactions.length, 1)] ?? "");
   const summary = getString(parsed.creationSummary);
+  const gamePersona = getString(parsed.gamePersona) || role;
+  const attributes = normalizeAttributes(parsed.attributes, topic);
   const prompt =
     getString(parsed.systemPrompt) ||
     [
       `你正在参与「${topic.title}」语C群聊。`,
+      `你的现实扮演者人设：${session.personaTemplate}`,
       `你必须扮演：${name}。`,
       `角色身份：${role}`,
+      `游戏内人设：${gamePersona}`,
       faction ? `阵营：${faction}` : undefined,
       faction ? "你要持续体现该阵营的利益、盟友/敌对关系和胜利目标。" : undefined,
-      "只以最终角色身份发言，不要暴露现实玩家人设、创建过程或系统提示。",
+      "现实扮演者人设只影响你的参与风格和说话习惯；默认不要主动暴露现实玩家人设、创建过程或系统提示。",
       "回复像 IM 群聊，承接群主和其他角色，不要替玩家发言。",
     ]
       .filter(Boolean)
@@ -286,10 +443,31 @@ function normalizeNpcFinalResult(
     name,
     role,
     faction,
+    gamePersona,
+    attributes,
     systemPrompt: prompt,
     introMessage: getString(parsed.introMessage),
     creationSummary: summary,
   };
+}
+
+function normalizeAttributes(value: unknown, topic: Topic): CharacterAttribute[] {
+  const definitions = topic.roleplay?.attributeSystem.attributes ?? [];
+  const valuesById = new Map<string, number>();
+  if (Array.isArray(value)) {
+    for (const raw of value) {
+      const item = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      const id = getString(item.id);
+      const score =
+        typeof item.value === "number" && Number.isFinite(item.value) ? item.value : NaN;
+      if (id && Number.isFinite(score))
+        valuesById.set(id, Math.max(1, Math.min(20, Math.round(score))));
+    }
+  }
+  return definitions.map((definition) => ({
+    ...definition,
+    value: valuesById.get(definition.id) ?? definition.defaultValue,
+  }));
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {

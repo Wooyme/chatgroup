@@ -6,6 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
+import {
+  ATTRIBUTE_TEMPLATES,
+  createCharacterAttributes,
+  mergeAttributeTemplates,
+} from "@/lib/attribute-templates";
 import type { FactionSystem, RoleplayTopicProfile } from "@/lib/chat-types";
 
 type BuilderMessage = {
@@ -109,6 +114,7 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
     | "factionTemplate"
     | "factionDraft"
     | "playerFaction"
+    | "attributes"
     | "reputation"
     | "notes"
     | "review"
@@ -117,11 +123,15 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
   const [factionNote, setFactionNote] = useState("");
   const [isGeneratingFaction, setIsGeneratingFaction] = useState(false);
   const [npcCount, setNpcCount] = useState(3);
+  const [selectedAttributeTemplates, setSelectedAttributeTemplates] = useState<string[]>(["jrpg"]);
+  const initialAttributeSystem = mergeAttributeTemplates(["jrpg"]);
   const [profile, setProfile] = useState<RoleplayTopicProfile>({
     playerRole: "",
     worldView: "",
     playerFaction: "",
     factionSystem: EMPTY_FACTION_SYSTEM,
+    attributeSystem: initialAttributeSystem,
+    playerAttributes: createCharacterAttributes(initialAttributeSystem.attributes),
     reputation: "",
     notes: "",
   });
@@ -132,6 +142,7 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
       `世界观：${profile.worldView}`,
       `阵营模板：${profile.factionSystem.template}`,
       `玩家阵营：${profile.playerFaction}`,
+      `属性模板：${profile.attributeSystem.templates.join("、")}`,
       `群主角色：${profile.playerRole}`,
       `群主风评：${profile.reputation}`,
       profile.notes ? `补充设定：${profile.notes}` : undefined,
@@ -217,6 +228,29 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
     setProfile((current) => ({ ...current, playerFaction: value }));
     append(
       makeUserMessage(`我的阵营是${value}`),
+      makeAssistantMessage("这个群使用哪类属性系统？可以选一个或多个模板，我会合并成最终属性表。"),
+    );
+    setStep("attributes");
+  };
+
+  const toggleAttributeTemplate = (templateId: string) => {
+    setSelectedAttributeTemplates((current) => {
+      const next = current.includes(templateId)
+        ? current.filter((id) => id !== templateId)
+        : [...current, templateId];
+      return next.length > 0 ? next : current;
+    });
+  };
+
+  const acceptAttributes = () => {
+    const attributeSystem = mergeAttributeTemplates(selectedAttributeTemplates);
+    setProfile((current) => ({
+      ...current,
+      attributeSystem,
+      playerAttributes: createCharacterAttributes(attributeSystem.attributes),
+    }));
+    append(
+      makeUserMessage(`属性模板选${attributeSystem.templates.join("、")}`),
       makeAssistantMessage("你的风评怎么样？这会影响其他玩家靠近你的方式。"),
     );
     setStep("reputation");
@@ -332,6 +366,20 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
               onChoose={choosePlayerFaction}
             />
           ) : null}
+          {step === "attributes" ? (
+            <div className="border-border bg-muted/40 grid gap-4 rounded-lg border p-4">
+              <AttributeTemplatePicker
+                selectedIds={selectedAttributeTemplates}
+                onToggle={toggleAttributeTemplate}
+              />
+              <AttributeSystemSummary
+                attributes={mergeAttributeTemplates(selectedAttributeTemplates).attributes}
+              />
+              <Button type="button" className="w-fit" onClick={acceptAttributes}>
+                使用这些属性模板
+              </Button>
+            </div>
+          ) : null}
           {step === "reputation" ? (
             <OptionGrid options={REPUTATION_OPTIONS} onChoose={chooseReputation} />
           ) : null}
@@ -344,6 +392,7 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
                 </div>
               </div>
               <FactionSystemSummary factionSystem={profile.factionSystem} />
+              <AttributeSystemSummary attributes={profile.attributeSystem.attributes} />
               <div className="grid gap-2">
                 <div className="text-sm font-medium">寻找其他玩家数量</div>
                 <div className="flex flex-wrap gap-2">
@@ -433,6 +482,68 @@ function FactionSystemSummary({ factionSystem }: { factionSystem: FactionSystem 
             <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
               已发生：{faction.pastMilestones.join("、") || "无"}；关键节点：
               {faction.futureMilestones.join("、") || "待定"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AttributeTemplatePicker({
+  selectedIds,
+  onToggle,
+}: {
+  selectedIds: string[];
+  onToggle: (templateId: string) => void;
+}) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {ATTRIBUTE_TEMPLATES.map((template) => {
+        const selected = selectedIds.includes(template.id);
+        return (
+          <button
+            key={template.id}
+            type="button"
+            onClick={() => onToggle(template.id)}
+            className={cn(
+              "border-border hover:bg-accent/70 grid gap-1 rounded-lg border px-3 py-2 text-left transition-colors",
+              selected && "border-primary bg-primary/10",
+            )}
+          >
+            <span className="text-sm font-medium">{template.name}</span>
+            <span className="text-muted-foreground text-xs leading-relaxed">
+              {template.description}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AttributeSystemSummary({
+  attributes,
+}: {
+  attributes: Array<{ id: string; name: string; description: string; defaultValue: number }>;
+}) {
+  return (
+    <div className="grid gap-2">
+      <div className="text-sm font-semibold">属性表</div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {attributes.map((attribute) => (
+          <div
+            key={attribute.id}
+            className="border-border bg-background rounded-md border px-3 py-2"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">{attribute.name}</span>
+              <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-xs">
+                {attribute.defaultValue}
+              </span>
+            </div>
+            <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
+              {attribute.description}
             </div>
           </div>
         ))}

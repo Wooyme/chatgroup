@@ -117,7 +117,7 @@ export function TopicWorkspaceSidebar({
   const activeTopic = topics[activeTopicId];
   const aiList = (activeTopic?.aiIds ?? [])
     .map((aiId) => ais[aiId])
-    .filter((ai): ai is AiParticipant => Boolean(ai));
+    .filter((ai): ai is AiParticipant => Boolean(ai) && ai.status !== "left");
   const chatList = (activeTopic?.chatIds ?? [])
     .map((chatId) => chats[chatId])
     .filter(Boolean)
@@ -236,7 +236,7 @@ export function TopicWorkspaceSidebar({
           options: aiList.map((ai) => ({
             value: ai.id,
             label: ai.name,
-            description: ai.role,
+            description: typeof ai.points === "number" ? `${ai.role} · 积分 ${ai.points}` : ai.role,
           })),
         },
         {
@@ -255,7 +255,13 @@ export function TopicWorkspaceSidebar({
       });
       return;
     }
-    createChat(activeTopic.id, mode, getFormText(values, "title"), participantIds);
+    const chatId = createChat(activeTopic.id, mode, getFormText(values, "title"), participantIds);
+    if (!chatId) {
+      await modal.alert({
+        title: "无法创建会话",
+        description: mode === "dialog" ? "该 NPC 积分不足，无法开始新的单聊。" : undefined,
+      });
+    }
   };
 
   const editChat = async (chatId: string, currentTitle: string) => {
@@ -341,15 +347,19 @@ export function TopicWorkspaceSidebar({
               {aiList.map((ai) => (
                 <SidebarMenuItem key={ai.id}>
                   <SidebarMenuButton
-                    tooltip={`${ai.name}：${ai.role}${
-                      ai.faction ? `\n阵营：${ai.faction}` : ""
+                    tooltip={`${ai.name}：${ai.role}${ai.faction ? `\n阵营：${ai.faction}` : ""}${
+                      typeof ai.points === "number" ? `\n积分：${ai.points}` : ""
                     }\n${getModelDisplayName(ai.modelId, ai.modelName)}`}
                   >
                     <span className={cn("size-2.5 rounded-full", ai.color)} />
                     <span>{ai.name}</span>
                     <span className="text-muted-foreground ms-auto grid min-w-0 justify-items-end text-[10px]">
                       <span className="max-w-20 truncate">
-                        {ai.faction ? `${ai.faction}｜${ai.role}` : ai.role}
+                        {typeof ai.points === "number"
+                          ? `${ai.points}分｜${ai.faction ? `${ai.faction}｜` : ""}${ai.role}`
+                          : ai.faction
+                            ? `${ai.faction}｜${ai.role}`
+                            : ai.role}
                       </span>
                       <span className="max-w-20 truncate">
                         {getModelDisplayName(ai.modelId, ai.modelName)}

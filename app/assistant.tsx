@@ -14,6 +14,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { useNpcCreationRunner } from "@/hooks/use-npc-creation-runner";
+import { useNpcProgressionRunner } from "@/hooks/use-npc-progression-runner";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
 
 export const Assistant = () => {
@@ -22,10 +23,12 @@ export const Assistant = () => {
   const topic = useChatWorkspaceStore((state) => state.topics[activeTopicId]);
   const chat = useChatWorkspaceStore((state) => state.chats[activeChatId]);
   const npcCreationSessions = useChatWorkspaceStore((state) => state.npcCreationSessions);
+  const npcProgressionSessions = useChatWorkspaceStore((state) => state.npcProgressionSessions);
   const modal = useWorkspaceModal();
   const [creatingTopic, setCreatingTopic] = useState(false);
 
   useNpcCreationRunner(npcCreationSessions);
+  useNpcProgressionRunner(npcProgressionSessions);
 
   return (
     <SidebarProvider>

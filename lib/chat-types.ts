@@ -46,11 +46,30 @@ export type FactionScoreEvent = {
   winningFactionId?: string;
 };
 
+export type AttributeDefinition = {
+  id: string;
+  name: string;
+  description: string;
+  defaultValue: number;
+  sourceTemplates: string[];
+};
+
+export type CharacterAttribute = AttributeDefinition & {
+  value: number;
+};
+
+export type AttributeSystem = {
+  templates: string[];
+  attributes: AttributeDefinition[];
+};
+
 export type RoleplayTopicProfile = {
   playerRole: string;
   worldView: string;
   playerFaction: string;
   factionSystem: FactionSystem;
+  attributeSystem: AttributeSystem;
+  playerAttributes: CharacterAttribute[];
   reputation: string;
   notes: string;
 };
@@ -89,8 +108,51 @@ export type NpcCreationSession = {
   index: number;
   status: NpcCreationStatus;
   personaTemplate: string;
+  targetFaction?: string;
+  roleNiche?: string;
+  reservedKeywords: string[];
+  revisionCount: number;
   messages: NpcCreationMessage[];
   resultAiId?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type NpcProgressionMessage = {
+  id: string;
+  role: "dm" | "npc" | "system";
+  name: string;
+  content: string;
+  createdAt: number;
+};
+
+export type NpcProgressionStatus = "queued" | "running" | "completed" | "failed";
+
+export type NpcTask = {
+  id: string;
+  title: string;
+  description: string;
+  type: "faction" | "personal";
+  rewardKind: "normal" | "key";
+  rewardPoints: number;
+  status: "open" | "completed";
+};
+
+export type InventoryItem = {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: number;
+};
+
+export type NpcProgressionSession = {
+  id: string;
+  topicId: string;
+  groupChatId: string;
+  aiId: string;
+  status: NpcProgressionStatus;
+  messages: NpcProgressionMessage[];
   error?: string;
   createdAt: number;
   updatedAt: number;
@@ -101,6 +163,15 @@ export type AiParticipant = {
   name: string;
   role: string;
   faction?: string;
+  realWorldPersona?: string;
+  gamePersona?: string;
+  points?: number;
+  status?: "active" | "left";
+  attributes?: CharacterAttribute[];
+  tasks?: NpcTask[];
+  personalGoal?: string;
+  inventory?: InventoryItem[];
+  progressionSessionId?: string;
   systemPrompt: string;
   color: string;
   provider: AiProvider;

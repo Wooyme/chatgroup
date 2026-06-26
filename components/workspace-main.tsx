@@ -3,6 +3,7 @@
 import { ChatRuntime } from "@/components/chat-runtime";
 import { FactionScorePanel } from "@/components/faction-score-panel";
 import { NpcRecruitmentWorkspace } from "@/components/npc-recruitment-workspace";
+import { NpcStatusPanel } from "@/components/npc-status-panel";
 import { ThemeCreationAssistant } from "@/components/theme-creation-assistant";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
 import type { ChatSession, NpcCreationSession, Topic } from "@/lib/chat-types";
@@ -19,6 +20,7 @@ export function WorkspaceMain({
   onCloseTopicCreator: () => void;
 }) {
   const npcCreationSessions = useChatWorkspaceStore((state) => state.npcCreationSessions);
+  const npcProgressionSessions = useChatWorkspaceStore((state) => state.npcProgressionSessions);
   const setActiveChat = useChatWorkspaceStore((state) => state.setActiveChat);
 
   if (creatingTopic) {
@@ -41,6 +43,9 @@ export function WorkspaceMain({
         sessions={chat.recruitment.sessionIds
           .map((sessionId) => npcCreationSessions[sessionId])
           .filter((session): session is NpcCreationSession => Boolean(session))}
+        progressionSessions={Object.values(npcProgressionSessions).filter(
+          (session) => session.groupChatId === chat.id,
+        )}
         groupChat={<TopicChatRuntime topic={topic} chat={chat} />}
       />
     );
@@ -58,6 +63,7 @@ function TopicChatRuntime({ topic, chat }: { topic: Topic; chat: ChatSession }) 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {factionSystem ? <FactionScorePanel factionSystem={factionSystem} chat={chat} /> : null}
+      {topic.roleplay ? <NpcStatusPanel topic={topic} participants={chat.participants} /> : null}
       <div className="min-h-0 flex-1">
         <ChatRuntime
           key={chat.id}
