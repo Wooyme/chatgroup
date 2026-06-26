@@ -236,7 +236,7 @@ export function TopicWorkspaceSidebar({
           options: aiList.map((ai) => ({
             value: ai.id,
             label: ai.name,
-            description: typeof ai.points === "number" ? `${ai.role} · 积分 ${ai.points}` : ai.role,
+            description: ai.role,
           })),
         },
         {
@@ -259,7 +259,7 @@ export function TopicWorkspaceSidebar({
     if (!chatId) {
       await modal.alert({
         title: "无法创建会话",
-        description: mode === "dialog" ? "该 NPC 积分不足，无法开始新的单聊。" : undefined,
+        description: "请确认至少选择了一个可互动的 AI。",
       });
     }
   };
@@ -348,18 +348,14 @@ export function TopicWorkspaceSidebar({
                 <SidebarMenuItem key={ai.id}>
                   <SidebarMenuButton
                     tooltip={`${ai.name}：${ai.role}${ai.faction ? `\n阵营：${ai.faction}` : ""}${
-                      typeof ai.points === "number" ? `\n积分：${ai.points}` : ""
+                      ai.status === "left" ? "\n状态：已离群" : ""
                     }\n${getModelDisplayName(ai.modelId, ai.modelName)}`}
                   >
                     <span className={cn("size-2.5 rounded-full", ai.color)} />
                     <span>{ai.name}</span>
                     <span className="text-muted-foreground ms-auto grid min-w-0 justify-items-end text-[10px]">
                       <span className="max-w-20 truncate">
-                        {typeof ai.points === "number"
-                          ? `${ai.points}分｜${ai.faction ? `${ai.faction}｜` : ""}${ai.role}`
-                          : ai.faction
-                            ? `${ai.faction}｜${ai.role}`
-                            : ai.role}
+                        {ai.faction ? `${ai.faction}｜${ai.role}` : ai.role}
                       </span>
                       <span className="max-w-20 truncate">
                         {getModelDisplayName(ai.modelId, ai.modelName)}

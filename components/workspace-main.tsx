@@ -63,7 +63,7 @@ function TopicChatRuntime({ topic, chat }: { topic: Topic; chat: ChatSession }) 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {factionSystem ? <FactionScorePanel factionSystem={factionSystem} chat={chat} /> : null}
-      {topic.roleplay ? <NpcStatusPanel topic={topic} participants={chat.participants} /> : null}
+      {topic.roleplay ? <NpcStatusPanel topic={topic} chat={chat} /> : null}
       <div className="min-h-0 flex-1">
         <ChatRuntime
           key={chat.id}
@@ -79,6 +79,10 @@ function TopicChatRuntime({ topic, chat }: { topic: Topic; chat: ChatSession }) 
               title: chat.title,
               mode: chat.mode,
               participants: chat.participants,
+              relationshipTasks: chat.relationshipTasks,
+              consentRequests: chat.consentRequests,
+              diceChecks: chat.diceChecks,
+              toolCallCounts: chat.toolCallCounts,
             },
           }}
         />

@@ -6,18 +6,21 @@ import type {
   AiParticipant,
   ChatSession,
   NpcProgressionSession,
-  NpcTask,
+  RelationshipTask,
+  RelationshipTaskDirection,
   Topic,
 } from "@/lib/chat-types";
 
-type ProgressionFinalResult = {
-  tasks: NpcTask[];
-  personalGoal: string;
+type TaskDraft = {
+  npcId: string;
+  npcName: string;
+  direction: RelationshipTaskDirection;
+  request: string;
+  stake: string;
+  suggestedApproach: string;
 };
 
-const PROGRESSION_MAX_MESSAGES = 10;
-const NORMAL_REWARD = 2;
-const KEY_REWARD = 5;
+const ACTIVE_STATUSES = new Set(["queued", "running"]);
 
 export function useNpcProgressionRunner(
   npcProgressionSessions: Record<string, NpcProgressionSession>,
@@ -26,12 +29,9 @@ export function useNpcProgressionRunner(
 
   useEffect(() => {
     Object.values(npcProgressionSessions).forEach((session) => {
-      if (
-        (session.status === "queued" || session.status === "running") &&
-        !runningSessions.current.has(session.id)
-      ) {
+      if (ACTIVE_STATUSES.has(session.status) && !runningSessions.current.has(session.id)) {
         runningSessions.current.add(session.id);
-        void runNpcProgressionSession(session.id).finally(() => {
+        void runTaskAssignmentSession(session.id).finally(() => {
           runningSessions.current.delete(session.id);
         });
       }
@@ -57,72 +57,42 @@ async function requestText(system: string, prompt: string) {
   return text;
 }
 
-async function runNpcProgressionSession(sessionId: string) {
-  const store = useChatWorkspaceStore.getState();
-  const session = store.npcProgressionSessions[sessionId];
-  if (!session) return;
-
-  store.setNpcProgressionStatus(sessionId, "running");
+async function runTaskAssignmentSession(sessionId: string) {
+  const context = getAssignmentContext(sessionId);
+  if (!context) return;
+  useChatWorkspaceStore.getState().setNpcProgressionStatus(sessionId, "running");
 
   try {
-    while (getProgressionMessageCount(sessionId) < PROGRESSION_MAX_MESSAGES) {
-      const latest = getProgressionContext(sessionId);
-      if (!latest) return;
-
-      if (latest.session.messages.at(-1)?.role !== "dm") {
-        const dmMessage = await requestText(
-          buildDmSystemPrompt(latest.topic),
-          buildDmTurnPrompt(latest.topic, latest.chat, latest.ai, latest.session),
-        );
-        useChatWorkspaceStore.getState().appendNpcProgressionMessage(sessionId, {
-          role: "dm",
-          name: "主持人",
-          content: dmMessage,
-        });
-      }
-
-      if (getProgressionMessageCount(sessionId) >= PROGRESSION_MAX_MESSAGES) break;
-
-      const afterDm = getProgressionContext(sessionId);
-      if (!afterDm) return;
-      const npcMessage = await requestText(
-        buildNpcSystemPrompt(afterDm.ai),
-        buildNpcTurnPrompt(afterDm.topic, afterDm.chat, afterDm.ai, afterDm.session),
-      );
-      useChatWorkspaceStore.getState().appendNpcProgressionMessage(sessionId, {
-        role: "npc",
-        name: afterDm.ai.name,
-        content: npcMessage,
-      });
-    }
-
-    const latest = getProgressionContext(sessionId);
-    if (!latest) return;
-    const finalText = await requestText(
-      buildDmSystemPrompt(latest.topic),
-      buildFinalPrompt(latest.topic, latest.chat, latest.ai, latest.session),
+    const text = await requestText(
+      buildDmSystemPrompt(context.topic),
+      buildAssignmentPrompt(context.topic, context.chat, context.session),
     );
-    const result = normalizeFinalResult(finalText);
+    const tasks = normalizeTasks(text, context.chat, context.session);
     useChatWorkspaceStore.getState().appendNpcProgressionMessage(sessionId, {
       role: "dm",
       name: "主持人",
-      content: `任务协商完成。\n个人目标：${result.personalGoal}\n${result.tasks
-        .map((task) => `- ${task.title}（+${task.rewardPoints}）`)
-        .join("\n")}`,
+      content: [
+        context.session.purpose === "initial_tasks" ? "第一轮任务已派发。" : "新任务已补发。",
+        ...tasks.map(
+          (task) =>
+            `- ${task.npcName}：${
+              task.direction === "npc_to_player" ? "NPC 请求玩家" : "玩家请求 NPC"
+            }同意「${task.request}」`,
+        ),
+      ].join("\n"),
     });
-    useChatWorkspaceStore.getState().completeNpcProgressionSession(sessionId, result);
+    useChatWorkspaceStore.getState().completeNpcProgressionSession(sessionId, { tasks });
   } catch (error) {
     const message = error instanceof Error ? error.message : "未知错误";
     useChatWorkspaceStore.getState().failNpcProgressionSession(sessionId, message);
   }
 }
 
-function getProgressionContext(sessionId: string):
+function getAssignmentContext(sessionId: string):
   | {
       session: NpcProgressionSession;
       topic: Topic;
       chat: ChatSession;
-      ai: AiParticipant;
     }
   | undefined {
   const state = useChatWorkspaceStore.getState();
@@ -130,17 +100,8 @@ function getProgressionContext(sessionId: string):
   if (!session) return undefined;
   const topic = state.topics[session.topicId];
   const chat = state.chats[session.groupChatId];
-  const ai = state.ais[session.aiId];
-  if (!topic || !chat || !ai) return undefined;
-  return { session, topic, chat, ai };
-}
-
-function getProgressionMessageCount(sessionId: string) {
-  const session = useChatWorkspaceStore.getState().npcProgressionSessions[sessionId];
-  return (
-    session?.messages.filter((message) => message.role === "dm" || message.role === "npc").length ??
-    0
-  );
+  if (!topic || !chat) return undefined;
+  return { session, topic, chat };
 }
 
 function buildTopicSummary(topic: Topic) {
@@ -151,10 +112,11 @@ function buildTopicSummary(topic: Topic) {
     `世界观：${roleplay.worldView}`,
     `玩家角色：${roleplay.playerRole}`,
     `玩家阵营：${roleplay.playerFaction}`,
+    `玩家风评：${roleplay.reputation}`,
     "阵营：",
     ...roleplay.factionSystem.factions.map(
       (faction) =>
-        `- ${faction.name}：${faction.description}；分数${faction.currentScore}/${faction.victoryScore}；胜利条件：${faction.victoryCondition}`,
+        `- ${faction.name}：${faction.description}；胜利条件：${faction.victoryCondition}`,
     ),
     "属性：",
     ...roleplay.attributeSystem.attributes.map(
@@ -163,140 +125,117 @@ function buildTopicSummary(topic: Topic) {
   ].join("\n");
 }
 
-function formatHistory(session: NpcProgressionSession) {
-  return session.messages.map((message) => `${message.name}：${message.content}`).join("\n");
-}
-
-function formatNpcProfile(ai: AiParticipant) {
-  return [
-    `NPC：${ai.name}`,
-    `现实扮演者人设：${ai.realWorldPersona || "未记录"}`,
-    `游戏内角色：${ai.gamePersona || ai.role}`,
-    `阵营：${ai.faction || "无"}`,
-    `积分：${ai.points ?? "无"}`,
-    `属性：${ai.attributes?.map((attribute) => `${attribute.name}${attribute.value}`).join("、") || "无"}`,
-  ].join("\n");
-}
-
 function buildDmSystemPrompt(topic: Topic) {
   return [
-    "你是中文语C群的主持人/DM，正在给已入群 NPC 安排阵营任务和个人目标。",
-    "你说话像 IM，短、自然、具体。",
-    "你可以直接派发阵营任务，但个人目标必须和 NPC 讨论后形成。",
-    "任务要能推动阵营胜利条件，也要方便和群主角色产生互动。",
-    "普通任务奖励 2 分，关键任务奖励 5 分。",
+    "你是中文语C群的主持人/DM，负责给玩家和 NPC 设计双向关系任务。",
+    "每个任务的核心都必须是：一方需要另一方同意某事。",
+    "任务要适合语C互动，不要写成抽象目标，也不要要求替玩家发言。",
+    "任务方向只有两种：npc_to_player 表示 NPC 需要玩家同意；player_to_npc 表示玩家需要 NPC 同意。",
     "不要说自己是 AI。",
     "群设定：",
     buildTopicSummary(topic),
   ].join("\n");
 }
 
-function buildNpcSystemPrompt(ai: AiParticipant) {
+function formatNpc(ai: AiParticipant) {
   return [
-    `你的现实扮演者人设：${ai.realWorldPersona || "普通语C玩家"}`,
-    `你在语C游戏中的角色人设：${ai.gamePersona || ai.role}`,
-    ai.faction ? `你的阵营：${ai.faction}` : undefined,
-    `你的当前积分：${ai.points ?? 0}`,
-    "你正在和 DM 讨论你入群后的阵营任务、个人目标和第一个个人任务。",
-    "现实扮演者人设影响你的语气和偏好；游戏角色人设决定你的目标、利益和行动边界。",
-    "回复像 IM，不写小说正文，不要说自己是 AI。",
+    `id=${ai.id}`,
+    `name=${ai.name}`,
+    `role=${ai.role}`,
+    ai.faction ? `faction=${ai.faction}` : undefined,
+    ai.gamePersona ? `persona=${ai.gamePersona}` : undefined,
+    ai.attributes?.length
+      ? `attributes=${ai.attributes.map((attribute) => `${attribute.name}${attribute.value}`).join("、")}`
+      : undefined,
   ]
     .filter(Boolean)
-    .join("\n");
+    .join("；");
 }
 
-function buildDmTurnPrompt(
-  topic: Topic,
-  chat: ChatSession,
-  ai: AiParticipant,
-  session: NpcProgressionSession,
-) {
-  const firstTurn = getProgressionMessageCount(session.id) === 0;
-  return [
-    `群设定：\n${buildTopicSummary(topic)}`,
-    `群成员：${chat.participants.map((participant) => participant.name).join("、")}`,
-    `NPC 档案：\n${formatNpcProfile(ai)}`,
-    `协商记录：\n${formatHistory(session) || "暂无。"}`,
-    firstTurn
-      ? "请先给这个 NPC 派发 1-2 个阵营任务，然后问他个人想达成什么目标。"
-      : "请继续推进协商：确认个人目标，或把个人目标拆成一个可执行的第一个个人任务。",
-    "只输出一条 IM 消息，不要输出 JSON。",
-  ].join("\n\n");
-}
+function buildAssignmentPrompt(topic: Topic, chat: ChatSession, session: NpcProgressionSession) {
+  const openTasks = chat.relationshipTasks?.filter((task) => task.status === "open") ?? [];
+  const focusNpc = session.focusNpcId
+    ? chat.participants.find((participant) => participant.id === session.focusNpcId)
+    : undefined;
 
-function buildNpcTurnPrompt(
-  topic: Topic,
-  chat: ChatSession,
-  ai: AiParticipant,
-  session: NpcProgressionSession,
-) {
   return [
     `群设定：\n${buildTopicSummary(topic)}`,
-    `群成员：${chat.participants.map((participant) => participant.name).join("、")}`,
-    `NPC 档案：\n${formatNpcProfile(ai)}`,
-    `协商记录：\n${formatHistory(session)}`,
-    "请以这个 NPC 的扮演者身份回复 DM，讨论你愿意承担的阵营任务、个人目标和第一个个人任务。",
-    "只输出一条 IM 消息。",
-  ].join("\n\n");
-}
-
-function buildFinalPrompt(
-  topic: Topic,
-  chat: ChatSession,
-  ai: AiParticipant,
-  session: NpcProgressionSession,
-) {
-  return [
-    "请作为 DM 总结这个 NPC 的阵营任务、个人目标和第一个个人任务。",
-    `群设定：\n${buildTopicSummary(topic)}`,
-    `群成员：${chat.participants.map((participant) => participant.name).join("、")}`,
-    `NPC 档案：\n${formatNpcProfile(ai)}`,
-    `协商记录：\n${formatHistory(session)}`,
+    "NPC 列表：",
+    ...(focusNpc ? [formatNpc(focusNpc)] : chat.participants.map(formatNpc)),
+    openTasks.length > 0 ? "当前未完成任务：" : undefined,
+    ...openTasks.map(
+      (task) => `- ${task.npcName}：${task.direction}；诉求=${task.request}；利害=${task.stake}`,
+    ),
+    session.reason ? `补发原因：${session.reason}` : undefined,
+    session.purpose === "initial_tasks"
+      ? "请派发第一轮任务，必须覆盖每个 NPC。每个 NPC 至少一条任务，方向可以 npc_to_player 或 player_to_npc，但整体要有双向关系。"
+      : "请只给指定 NPC 补发一条新任务，不要重复当前未完成任务。",
     "必须返回严格 JSON，不要 Markdown，不要解释。",
-    "至少 1 个阵营任务，至少 1 个个人任务。",
-    '返回格式：{"personalGoal":"...","factionTasks":[{"title":"...","description":"...","rewardKind":"normal 或 key"}],"personalTasks":[{"title":"...","description":"...","rewardKind":"normal 或 key"}]}',
-  ].join("\n\n");
+    '返回格式：{"tasks":[{"npcId":"必须使用 NPC id","npcName":"NPC 名称","direction":"npc_to_player 或 player_to_npc","request":"需要对方同意的具体事项","stake":"为什么这件事重要/失败代价","suggestedApproach":"建议如何在语C中推进"}]}',
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-function normalizeFinalResult(text: string): ProgressionFinalResult {
+function normalizeTasks(
+  text: string,
+  chat: ChatSession,
+  session: NpcProgressionSession,
+): RelationshipTask[] {
   const parsed = parseJsonObject(text);
-  const personalGoal = getString(parsed.personalGoal) || "在群内稳住自己的位置并推动阵营利益。";
-  const factionTasks = normalizeTasks(parsed.factionTasks, "faction");
-  const personalTasks = normalizeTasks(parsed.personalTasks, "personal");
-  return {
-    personalGoal,
-    tasks: [...factionTasks, ...personalTasks],
-  };
-}
+  const rawTasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+  const participantsById = new Map(
+    chat.participants.map((participant) => [participant.id, participant]),
+  );
+  const existingByNpc = new Set(
+    (chat.relationshipTasks ?? [])
+      .filter((task) => task.status === "open")
+      .map((task) => `${task.npcId}:${task.request}`),
+  );
+  const drafts = rawTasks
+    .map((raw): TaskDraft | undefined => {
+      const item = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      const npcId = getString(item.npcId);
+      const npc = participantsById.get(npcId);
+      if (!npc) return undefined;
+      if (session.focusNpcId && npc.id !== session.focusNpcId) return undefined;
+      const direction =
+        getString(item.direction) === "player_to_npc" ? "player_to_npc" : "npc_to_player";
+      const request = getString(item.request) || "同意一次关键互动安排";
+      const key = `${npc.id}:${request}`;
+      if (existingByNpc.has(key)) return undefined;
+      return {
+        npcId: npc.id,
+        npcName: npc.name,
+        direction,
+        request,
+        stake: getString(item.stake) || "这会影响双方关系和后续剧情。",
+        suggestedApproach: getString(item.suggestedApproach) || "通过一次直接的语C互动推进。",
+      };
+    })
+    .filter((task): task is TaskDraft => Boolean(task));
 
-function normalizeTasks(value: unknown, type: NpcTask["type"]) {
-  const rawTasks = Array.isArray(value) ? value : [];
-  const tasks = rawTasks.slice(0, type === "faction" ? 3 : 2).map((raw, index): NpcTask => {
-    const item = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-    const rewardKind = getString(item.rewardKind) === "key" ? "key" : "normal";
-    return {
-      id: `task_${type}_${Date.now().toString(36)}_${index}_${Math.random()
-        .toString(36)
-        .slice(2, 6)}`,
-      title: getString(item.title) || (type === "faction" ? "推进阵营目标" : "完成个人目标"),
-      description: getString(item.description) || "待在剧情中推进。",
-      type,
-      rewardKind,
-      rewardPoints: rewardKind === "key" ? KEY_REWARD : NORMAL_REWARD,
-      status: "open",
-    };
-  });
-  if (tasks.length > 0) return tasks;
-  const fallback: NpcTask = {
-    id: `task_${type}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
-    title: type === "faction" ? "推进阵营目标" : "建立个人目标",
-    description: "在后续剧情中寻找一次明确行动机会。",
-    type,
-    rewardKind: "normal",
-    rewardPoints: NORMAL_REWARD,
+  const neededParticipants = session.focusNpcId
+    ? chat.participants.filter((participant) => participant.id === session.focusNpcId)
+    : chat.participants;
+  for (const participant of neededParticipants) {
+    if (drafts.some((task) => task.npcId === participant.id)) continue;
+    drafts.push({
+      npcId: participant.id,
+      npcName: participant.name,
+      direction: "npc_to_player",
+      request: "同意进行一次私下会面",
+      stake: "这会决定双方是否能建立直接关系。",
+      suggestedApproach: "让 NPC 在单聊中提出具体理由和交换条件。",
+    });
+  }
+
+  return drafts.map((draft) => ({
+    id: `rel_task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    ...draft,
     status: "open",
-  };
-  return [fallback];
+    createdAt: Date.now(),
+  }));
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -304,10 +243,10 @@ function parseJsonObject(text: string): Record<string, unknown> {
   const source = fenced ?? text;
   const start = source.indexOf("{");
   const end = source.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) throw new Error("任务总结不是 JSON");
+  if (start === -1 || end === -1 || end <= start) throw new Error("任务派发不是 JSON");
   const parsed = JSON.parse(source.slice(start, end + 1)) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("任务总结 JSON 格式错误");
+    throw new Error("任务派发 JSON 格式错误");
   }
   return parsed as Record<string, unknown>;
 }

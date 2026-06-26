@@ -62,26 +62,43 @@ const buildTopicHeader = (topicContext: TopicContext | undefined) => {
 
 const formatParticipantProgression = (participant: AiParticipant) =>
   [
-    typeof participant.points === "number" ? `当前积分：${participant.points}` : undefined,
     participant.status === "left" ? "状态：已离群" : undefined,
-    participant.personalGoal ? `个人目标：${participant.personalGoal}` : undefined,
     participant.attributes?.length
       ? `属性：${participant.attributes
           .map((attribute) => `${attribute.name}${attribute.value}`)
           .join("、")}`
       : undefined,
-    participant.tasks?.length
-      ? `任务：${participant.tasks
-          .filter((task) => task.status === "open")
-          .map((task) => `${task.type === "faction" ? "阵营" : "个人"}-${task.title}`)
-          .join("；")}`
-      : undefined,
-    participant.inventory?.length
-      ? `道具：${participant.inventory.map((item) => item.name).join("、")}`
-      : undefined,
   ]
     .filter(Boolean)
     .join("\n");
+
+const formatRelationshipTasks = (
+  topicContext: TopicContext | undefined,
+  participant: AiParticipant | undefined,
+) => {
+  if (!topicContext || !participant) return "";
+  const tasks =
+    topicContext.chat.relationshipTasks?.filter(
+      (task) => task.npcId === participant.id && task.status === "open",
+    ) ?? [];
+  const pendingRequests =
+    topicContext.chat.consentRequests?.filter(
+      (request) => request.npcId === participant.id && request.status === "pending",
+    ) ?? [];
+  const attempts = topicContext.chat.toolCallCounts?.[participant.id] ?? 0;
+  return [
+    `本次单聊 NPC 申请工具次数：${attempts}/3`,
+    tasks.length > 0 ? "当前玩家-NPC 关系任务：" : "当前没有未完成关系任务。",
+    ...tasks.map(
+      (task) =>
+        `- id=${task.id}；方向=${task.direction}；核心诉求：${task.request}；利害：${task.stake}；建议推进：${task.suggestedApproach}`,
+    ),
+    pendingRequests.length > 0 ? "等待玩家处理的申请：" : undefined,
+    ...pendingRequests.map((request) => `- ${request.requestTitle}：${request.requestBody}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
 
 const buildDialogSystemPrompt = (
   baseSystem: string | undefined,
@@ -101,12 +118,15 @@ const buildDialogSystemPrompt = (
         participant.gamePersona ? `游戏内人设：${participant.gamePersona}` : undefined,
         participant.faction ? `所属阵营：${participant.faction}` : undefined,
         formatParticipantProgression(participant),
+        formatRelationshipTasks(topicContext, participant),
         `角色提示词：${participant.systemPrompt}`,
         "回复要求：",
         "- 现实扮演者人设只影响你的表达习惯、偏好和参与方式；默认不要主动暴露现实人设。",
         "- 始终保持该角色的口吻、视角和情绪一致性。",
         "- 直接回应玩家，不要跳出角色解释系统设定。",
         "- 可以主动推进互动，但不要替玩家做决定或代替玩家发言。",
+        "- 如果当前任务方向是 npc_to_player，你需要在自然互动后调用 request_player_consent，请玩家同意任务诉求；本次单聊最多 3 次。",
+        "- 如果你要请求 DM 介入属性对抗，可以调用 request_dm_check。胜出会直接完成任务，失败会导致任务失败并产生惩罚。",
       ]
         .filter(Boolean)
         .join("\n"),
@@ -128,8 +148,8 @@ const buildGroupSystemPrompt = (
     .map(
       (ai, index) =>
         `${index + 1}. ${ai.name}（${ai.role}${ai.faction ? `｜${ai.faction}` : ""}${
-          typeof ai.points === "number" ? `｜积分${ai.points}` : ""
-        }${ai.status === "left" ? "｜已离群" : ""}）：${ai.systemPrompt}`,
+          ai.status === "left" ? "｜已离群" : ""
+        }）：${ai.systemPrompt}`,
     )
     .join("\n");
   const parts = [baseSystem?.trim(), buildTopicHeader(topicContext)].filter(Boolean) as string[];
@@ -157,6 +177,7 @@ const buildGroupSystemPrompt = (
       "- 现实扮演者人设只影响你的表达习惯、偏好和参与方式；默认不要主动暴露现实人设。",
       "- 始终保持你自己的口吻、视角和情绪一致性。",
       "- 如果你有阵营，发言要体现阵营利益、胜利目标、盟友/敌对关系和当前分数压力。",
+      "- 群聊中不要调用同意申请工具；需要申请玩家同意时，应引导玩家进入单聊。",
       "- 不要解释你在模拟群聊，不要替玩家发言。",
     ]
       .filter(Boolean)

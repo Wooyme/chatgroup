@@ -140,11 +140,8 @@ async function runNpcCreationSession(sessionId: string) {
         faction: result.faction,
         realWorldPersona: latest.session.personaTemplate,
         gamePersona: result.gamePersona,
-        points: 10,
         status: "active",
         attributes: result.attributes,
-        tasks: [],
-        inventory: [],
         systemPrompt: result.systemPrompt,
       });
       break;

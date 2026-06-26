@@ -48,7 +48,7 @@ export function NpcRecruitmentWorkspace({
 
   const title = useMemo(() => {
     if (selectedId === "group") return chat.title;
-    if (selectedProgressionSession) return "任务协商";
+    if (selectedProgressionSession) return "DM 派发任务";
     return selectedSession ? `候选玩家 ${selectedSession.index + 1}` : "候选玩家";
   }, [chat.title, selectedId, selectedProgressionSession, selectedSession]);
 
@@ -77,9 +77,6 @@ export function NpcRecruitmentWorkspace({
           </Button>
           {sessions.map((session) => {
             const participant = chat.participants.find((ai) => ai.id === session.resultAiId);
-            const progressionSession = progressionSessions.find(
-              (item) => item.aiId === session.resultAiId,
-            );
             return (
               <div key={session.id} className="grid gap-1">
                 <Button
@@ -104,31 +101,32 @@ export function NpcRecruitmentWorkspace({
                           : "排队"}
                   </span>
                 </Button>
-                {progressionSession ? (
-                  <Button
-                    type="button"
-                    variant={
-                      selectedId === `progression:${progressionSession.id}` ? "secondary" : "ghost"
-                    }
-                    className="h-auto justify-start gap-2 rounded-md px-7 py-1.5 text-xs"
-                    onClick={() => setSelectedId(`progression:${progressionSession.id}`)}
-                  >
-                    <SessionStatusIcon status={progressionSession.status} />
-                    <span className="min-w-0 flex-1 truncate text-left">任务协商</span>
-                    <span className="text-muted-foreground">
-                      {progressionSession.status === "completed"
-                        ? "完成"
-                        : progressionSession.status === "failed"
-                          ? "失败"
-                          : progressionSession.status === "running"
-                            ? "进行中"
-                            : "排队"}
-                    </span>
-                  </Button>
-                ) : null}
               </div>
             );
           })}
+          {progressionSessions.map((session) => (
+            <Button
+              key={session.id}
+              type="button"
+              variant={selectedId === `progression:${session.id}` ? "secondary" : "ghost"}
+              className="h-auto justify-start gap-2 rounded-md px-2 py-2"
+              onClick={() => setSelectedId(`progression:${session.id}`)}
+            >
+              <SessionStatusIcon status={session.status} />
+              <span className="min-w-0 flex-1 truncate text-left">
+                {session.purpose === "initial_tasks" ? "第一轮任务" : "补发任务"}
+              </span>
+              <span className="text-muted-foreground text-xs">
+                {session.status === "completed"
+                  ? "完成"
+                  : session.status === "failed"
+                    ? "失败"
+                    : session.status === "running"
+                      ? "进行中"
+                      : "排队"}
+              </span>
+            </Button>
+          ))}
         </div>
         <div className="mt-auto border-t p-3">
           <div className="text-muted-foreground max-h-40 overflow-y-auto text-xs leading-relaxed">
@@ -165,7 +163,7 @@ export function NpcRecruitmentWorkspace({
             ))}
             {progressionSessions.map((session) => (
               <option key={session.id} value={`progression:${session.id}`}>
-                任务协商 {session.aiId}
+                {session.purpose === "initial_tasks" ? "第一轮任务" : "补发任务"}
               </option>
             ))}
           </select>
@@ -297,7 +295,9 @@ function NpcProgressionChat({ session }: { session: NpcProgressionSession }) {
       <div className="flex-1 overflow-y-auto px-4 py-5">
         <div className="mb-4 flex items-center gap-2 text-sm">
           <BotIcon className="text-muted-foreground size-4" />
-          <span className="font-medium">入群任务协商</span>
+          <span className="font-medium">
+            {session.purpose === "initial_tasks" ? "第一轮任务派发" : "补发关系任务"}
+          </span>
         </div>
         <div className="grid gap-4">
           {session.messages.map((message) => (
@@ -340,7 +340,7 @@ function NpcProgressionChat({ session }: { session: NpcProgressionSession }) {
           {session.status === "failed" ? (
             <div className="text-destructive flex items-center justify-center gap-2 text-xs">
               <XCircleIcon className="size-3.5" />
-              {session.error ?? "任务协商失败"}
+              {session.error ?? "任务派发失败"}
             </div>
           ) : null}
         </div>

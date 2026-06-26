@@ -129,20 +129,58 @@ export type NpcProgressionMessage = {
 
 export type NpcProgressionStatus = "queued" | "running" | "completed" | "failed";
 
-export type NpcTask = {
+export type RelationshipTaskDirection = "npc_to_player" | "player_to_npc";
+
+export type RelationshipTaskStatus = "open" | "completed" | "failed";
+
+export type RelationshipTask = {
   id: string;
-  title: string;
-  description: string;
-  type: "faction" | "personal";
-  rewardKind: "normal" | "key";
-  rewardPoints: number;
-  status: "open" | "completed";
+  npcId: string;
+  npcName: string;
+  direction: RelationshipTaskDirection;
+  request: string;
+  stake: string;
+  suggestedApproach: string;
+  status: RelationshipTaskStatus;
+  resolution?: string;
+  createdAt: number;
+  resolvedAt?: number;
 };
 
-export type InventoryItem = {
+export type ConsentRequest = {
   id: string;
-  name: string;
-  description: string;
+  chatId: string;
+  taskId: string;
+  npcId: string;
+  npcName: string;
+  requestTitle: string;
+  requestBody: string;
+  npcReactionHint: string;
+  status: "pending" | "approved" | "rejected";
+  playerReaction?: string;
+  createdAt: number;
+  resolvedAt?: number;
+};
+
+export type DiceCheck = {
+  id: string;
+  chatId: string;
+  taskId: string;
+  npcId: string;
+  npcName: string;
+  initiator: "npc" | "player";
+  playerAttributeId: string;
+  playerAttributeName: string;
+  playerAttributeValue: number;
+  npcAttributeId: string;
+  npcAttributeName: string;
+  npcAttributeValue: number;
+  playerRoll: number;
+  npcRoll: number;
+  playerTotal: number;
+  npcTotal: number;
+  winner: "player" | "npc";
+  dmResult: string;
   createdAt: number;
 };
 
@@ -150,7 +188,9 @@ export type NpcProgressionSession = {
   id: string;
   topicId: string;
   groupChatId: string;
-  aiId: string;
+  purpose: "initial_tasks" | "replacement_task";
+  focusNpcId?: string;
+  reason?: string;
   status: NpcProgressionStatus;
   messages: NpcProgressionMessage[];
   error?: string;
@@ -165,13 +205,8 @@ export type AiParticipant = {
   faction?: string;
   realWorldPersona?: string;
   gamePersona?: string;
-  points?: number;
   status?: "active" | "left";
   attributes?: CharacterAttribute[];
-  tasks?: NpcTask[];
-  personalGoal?: string;
-  inventory?: InventoryItem[];
-  progressionSessionId?: string;
   systemPrompt: string;
   color: string;
   provider: AiProvider;
@@ -198,6 +233,11 @@ export type ChatSession = {
   participants: AiParticipant[];
   recruitment?: ChatRecruitment;
   factionScoreEvents?: FactionScoreEvent[];
+  relationshipTasks?: RelationshipTask[];
+  consentRequests?: ConsentRequest[];
+  diceChecks?: DiceCheck[];
+  taskAssignmentSessionIds?: string[];
+  toolCallCounts?: Record<string, number>;
   createdAt: number;
   updatedAt: number;
 };
@@ -212,7 +252,17 @@ export type StoredMessageRow<TContent extends Record<string, unknown> = Record<s
 
 export type TopicContext = {
   topic: Pick<Topic, "id" | "title" | "description" | "roleplay">;
-  chat: Pick<ChatSession, "id" | "title" | "mode" | "participants">;
+  chat: Pick<
+    ChatSession,
+    | "id"
+    | "title"
+    | "mode"
+    | "participants"
+    | "relationshipTasks"
+    | "consentRequests"
+    | "diceChecks"
+    | "toolCallCounts"
+  >;
 };
 
 export const DEFAULT_AI_PARTICIPANTS: AiParticipant[] = [
