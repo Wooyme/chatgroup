@@ -1,7 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Dice5Icon, GavelIcon, XIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  Dice5Icon,
+  GavelIcon,
+  PanelsTopLeftIcon,
+  XIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
 import type {
@@ -23,22 +30,29 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
   const resolveRelationshipTask = useChatWorkspaceStore((state) => state.resolveRelationshipTask);
   const addDiceCheck = useChatWorkspaceStore((state) => state.addDiceCheck);
   const playerAttributes = topic.roleplay?.playerAttributes ?? [];
-  const tasks = topic.relationshipTasks ?? [];
+  const participant = chat.participants[0];
+  const tasks = (topic.relationshipTasks ?? []).filter((task) => task.npcId === participant?.id);
   const pendingRequests =
-    topic.consentRequests?.filter((request) => request.status === "pending") ?? [];
+    topic.consentRequests?.filter(
+      (request) => request.status === "pending" && request.npcId === participant?.id,
+    ) ?? [];
   const [activeForm, setActiveForm] = useState<PanelFormState | undefined>();
   const [text, setText] = useState("");
   const [playerAttributeId, setPlayerAttributeId] = useState(playerAttributes[0]?.id ?? "");
   const [npcAttributeByTask, setNpcAttributeByTask] = useState<Record<string, string>>({});
   const [busyTaskId, setBusyTaskId] = useState("");
   const [requestReactions, setRequestReactions] = useState<Record<string, string>>({});
+  const [expanded, setExpanded] = useState(true);
+  const finalScene = chat.sceneSetup?.finalScene;
 
   const npcById = useMemo(
     () => new Map(chat.participants.map((participant) => [participant.id, participant])),
     [chat.participants],
   );
 
-  if (!topic.roleplay || (tasks.length === 0 && playerAttributes.length === 0)) return null;
+  if (!topic.roleplay || !participant) {
+    return null;
+  }
 
   const judgePlayerRequest = async (task: RelationshipTask) => {
     const npc = npcById.get(task.npcId);
@@ -103,227 +117,292 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
   };
 
   return (
-    <div className="border-b bg-background">
-      <div className="grid max-h-80 gap-3 overflow-y-auto px-4 py-3 lg:grid-cols-[minmax(220px,0.7fr)_minmax(0,2fr)]">
-        <div className="border-border rounded-md border p-3">
-          <div className="text-sm font-semibold">{topic.roleplay.playerRole} · 玩家属性</div>
-          <AttributeList attributes={playerAttributes} />
-        </div>
-        <div className="grid gap-2">
-          {pendingRequests.map((request) => (
-            <div key={request.id} className="border-primary/30 bg-primary/5 rounded-md border p-3">
-              <div className="text-sm font-semibold">{request.npcName} 的申请</div>
-              <div className="mt-1 text-sm">{request.requestTitle}</div>
-              <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
-                {request.requestBody}
-              </div>
-              <textarea
-                className="border-input bg-background mt-2 min-h-16 w-full resize-y rounded-md border px-2 py-1.5 text-xs outline-none"
-                placeholder="写一段玩家的语C反应..."
-                value={requestReactions[request.id] ?? ""}
-                onChange={(event) =>
-                  setRequestReactions((current) => ({
-                    ...current,
-                    [request.id]: event.target.value,
-                  }))
-                }
-              />
-              <div className="mt-2 flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() =>
-                    resolveConsentRequest(
-                      chat.id,
-                      request.id,
-                      true,
-                      requestReactions[request.id] || "我同意。",
-                    )
-                  }
-                >
-                  同意
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs"
-                  onClick={() =>
-                    resolveConsentRequest(
-                      chat.id,
-                      request.id,
-                      false,
-                      requestReactions[request.id] || "我拒绝。",
-                    )
-                  }
-                >
-                  驳回
-                </Button>
-              </div>
+    <div className="pointer-events-none absolute top-4 right-4 left-4 z-20 max-h-[calc(100%-2rem)]">
+      {expanded ? (
+        <div className="pointer-events-auto overflow-hidden rounded-md border bg-background/95 shadow-lg backdrop-blur">
+          <div className="flex h-10 items-center justify-between gap-2 border-b px-3">
+            <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
+              <PanelsTopLeftIcon className="size-4 shrink-0" />
+              <span className="truncate">场景与任务</span>
+              <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-xs">
+                {pendingRequests.length + tasks.filter((task) => task.status === "open").length}
+              </span>
             </div>
-          ))}
-          {tasks.map((task) => {
-            const npc = npcById.get(task.npcId);
-            const formOpen = activeForm?.taskId === task.id;
-            const hiddenNpcRequest = task.direction === "npc_to_player";
-            return (
-              <div key={task.id} className="border-border rounded-md border p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold">{task.npcName}</span>
-                  <span
-                    className={cn(
-                      "rounded px-1.5 py-0.5 text-xs",
-                      task.status === "open"
-                        ? "bg-muted text-muted-foreground"
-                        : task.status === "completed"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-destructive/10 text-destructive",
-                    )}
-                  >
-                    {task.status === "open"
-                      ? task.direction === "npc_to_player"
-                        ? "对方有事"
-                        : "玩家请求 NPC"
-                      : task.status === "completed"
-                        ? "已完成"
-                        : "失败"}
-                  </span>
-                </div>
-                <div className="mt-1 text-sm">
-                  {hiddenNpcRequest
-                    ? task.visibleHint || `${task.npcName}似乎有什么事想和你谈。`
-                    : `同意：${task.request}`}
-                </div>
-                <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
-                  {hiddenNpcRequest ? task.lore : `${task.stake} · ${task.suggestedApproach}`}
-                </div>
-                {task.resolution ? (
-                  <div className="text-muted-foreground mt-2 text-xs">结果：{task.resolution}</div>
-                ) : null}
-                {task.status === "open" ? (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {task.direction === "player_to_npc" ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-7 gap-1 text-xs"
-                        onClick={() => {
-                          setActiveForm({ taskId: task.id, mode: "judge" });
-                          setText("");
-                        }}
-                      >
-                        <GavelIcon className="size-3.5" />
-                        请求 DM 判断
-                      </Button>
-                    ) : null}
-                    {task.direction === "player_to_npc" ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-7 gap-1 text-xs"
-                        disabled={!npc?.attributes?.length || playerAttributes.length === 0}
-                        onClick={() => {
-                          setActiveForm({ taskId: task.id, mode: "dice" });
-                          setNpcAttributeByTask((current) => ({
-                            ...current,
-                            [task.id]: npc?.attributes?.[0]?.id ?? "",
-                          }));
-                        }}
-                      >
-                        <Dice5Icon className="size-3.5" />
-                        属性检定
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
-                {formOpen && activeForm?.mode === "judge" ? (
-                  <div className="bg-muted/40 mt-3 grid gap-2 rounded-md p-2">
-                    <textarea
-                      className="border-input bg-background min-h-20 w-full resize-y rounded-md border px-2 py-1.5 text-xs outline-none"
-                      placeholder="写下玩家提出的要求、对话依据和语C反应..."
-                      value={text}
-                      onChange={(event) => setText(event.target.value)}
-                    />
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="h-7 text-xs"
-                        disabled={busyTaskId === task.id}
-                        onClick={() => judgePlayerRequest(task)}
-                      >
-                        {busyTaskId === task.id ? "DM 判断中..." : "提交"}
-                      </Button>
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="size-7"
-                        onClick={() => setActiveForm(undefined)}
-                      >
-                        <XIcon className="size-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
-                {formOpen && activeForm?.mode === "dice" && npc?.attributes?.length ? (
-                  <div className="bg-muted/40 mt-3 grid gap-2 rounded-md p-2">
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <AttributeSelect
-                        label="玩家属性"
-                        attributes={playerAttributes}
-                        value={playerAttributeId}
-                        onChange={setPlayerAttributeId}
-                      />
-                      <AttributeSelect
-                        label={`${npc.name} 属性`}
-                        attributes={npc.attributes}
-                        value={npcAttributeByTask[task.id] || npc.attributes[0]!.id}
-                        onChange={(value) =>
-                          setNpcAttributeByTask((current) => ({ ...current, [task.id]: value }))
-                        }
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="h-7 text-xs"
-                        disabled={busyTaskId === task.id}
-                        onClick={() => runPlayerDiceCheck(task)}
-                      >
-                        {busyTaskId === task.id ? "检定中..." : "投骰"}
-                      </Button>
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="size-7"
-                        onClick={() => setActiveForm(undefined)}
-                      >
-                        <XIcon className="size-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-          {topic.diceChecks?.slice(-3).map((check) => (
-            <div
-              key={check.id}
-              className="text-muted-foreground rounded-md border px-3 py-2 text-xs"
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="size-7"
+              onClick={() => setExpanded(false)}
+              aria-label="收起场景与任务面板"
             >
-              {check.npcName} 检定：玩家 {check.playerAttributeName} {check.playerRoll}+
-              {check.playerAttributeValue}={check.playerTotal}；NPC {check.npcAttributeName}{" "}
-              {check.npcRoll}+{check.npcAttributeValue}={check.npcTotal}。{check.dmResult}
+              <ChevronUpIcon className="size-4" />
+            </Button>
+          </div>
+          <div className="grid max-h-[min(34rem,calc(100vh-9rem))] gap-3 overflow-y-auto p-3 lg:grid-cols-[minmax(190px,0.7fr)_minmax(0,2fr)]">
+            {finalScene ? (
+              <div className="border-border rounded-md border bg-muted/20 p-3 lg:col-span-2">
+                <div className="text-sm font-semibold">DM 场景</div>
+                <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
+                  {finalScene}
+                </div>
+              </div>
+            ) : null}
+            <div className="border-border rounded-md border p-3">
+              <div className="text-sm font-semibold">{topic.roleplay.playerRole} · 玩家属性</div>
+              <AttributeList attributes={playerAttributes} />
             </div>
-          ))}
+            <div className="grid gap-2">
+              {pendingRequests.map((request) => (
+                <div
+                  key={request.id}
+                  className="border-primary/30 bg-primary/5 rounded-md border p-3"
+                >
+                  <div className="text-sm font-semibold">{request.npcName} 的申请</div>
+                  <div className="mt-1 text-sm">{request.requestTitle}</div>
+                  <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
+                    {request.requestBody}
+                  </div>
+                  <textarea
+                    className="border-input bg-background mt-2 min-h-16 w-full resize-y rounded-md border px-2 py-1.5 text-xs outline-none"
+                    placeholder="写一段玩家的语C反应..."
+                    value={requestReactions[request.id] ?? ""}
+                    onChange={(event) =>
+                      setRequestReactions((current) => ({
+                        ...current,
+                        [request.id]: event.target.value,
+                      }))
+                    }
+                  />
+                  <div className="mt-2 flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() =>
+                        resolveConsentRequest(
+                          chat.id,
+                          request.id,
+                          true,
+                          requestReactions[request.id] || "我同意。",
+                        )
+                      }
+                    >
+                      同意
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() =>
+                        resolveConsentRequest(
+                          chat.id,
+                          request.id,
+                          false,
+                          requestReactions[request.id] || "我拒绝。",
+                        )
+                      }
+                    >
+                      驳回
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {tasks.map((task) => {
+                const npc = npcById.get(task.npcId);
+                const formOpen = activeForm?.taskId === task.id;
+                const hiddenNpcRequest = task.direction === "npc_to_player";
+                return (
+                  <div key={task.id} className="border-border rounded-md border p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold">{task.npcName}</span>
+                      <span
+                        className={cn(
+                          "rounded px-1.5 py-0.5 text-xs",
+                          task.status === "open"
+                            ? "bg-muted text-muted-foreground"
+                            : task.status === "completed"
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-destructive/10 text-destructive",
+                        )}
+                      >
+                        {task.status === "open"
+                          ? task.direction === "npc_to_player"
+                            ? "对方有事"
+                            : "玩家请求 NPC"
+                          : task.status === "completed"
+                            ? "已完成"
+                            : "失败"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-sm">
+                      {hiddenNpcRequest
+                        ? task.visibleHint || `${task.npcName}似乎有什么事想和你谈。`
+                        : `同意：${task.request}`}
+                    </div>
+                    <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
+                      {hiddenNpcRequest ? task.lore : `${task.stake} · ${task.suggestedApproach}`}
+                    </div>
+                    {task.resolution ? (
+                      <div className="text-muted-foreground mt-2 text-xs">
+                        结果：{task.resolution}
+                      </div>
+                    ) : null}
+                    {task.status === "open" ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {task.direction === "player_to_npc" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 text-xs"
+                            onClick={() => {
+                              setActiveForm({ taskId: task.id, mode: "judge" });
+                              setText("");
+                            }}
+                          >
+                            <GavelIcon className="size-3.5" />
+                            请求 DM 判断
+                          </Button>
+                        ) : null}
+                        {task.direction === "player_to_npc" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 text-xs"
+                            disabled={!npc?.attributes?.length || playerAttributes.length === 0}
+                            onClick={() => {
+                              setActiveForm({ taskId: task.id, mode: "dice" });
+                              setNpcAttributeByTask((current) => ({
+                                ...current,
+                                [task.id]: npc?.attributes?.[0]?.id ?? "",
+                              }));
+                            }}
+                          >
+                            <Dice5Icon className="size-3.5" />
+                            属性检定
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {formOpen && activeForm?.mode === "judge" ? (
+                      <div className="bg-muted/40 mt-3 grid gap-2 rounded-md p-2">
+                        <textarea
+                          className="border-input bg-background min-h-20 w-full resize-y rounded-md border px-2 py-1.5 text-xs outline-none"
+                          placeholder="写下玩家提出的要求、对话依据和语C反应..."
+                          value={text}
+                          onChange={(event) => setText(event.target.value)}
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 text-xs"
+                            disabled={busyTaskId === task.id}
+                            onClick={() => judgePlayerRequest(task)}
+                          >
+                            {busyTaskId === task.id ? "DM 判断中..." : "提交"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="size-7"
+                            onClick={() => setActiveForm(undefined)}
+                          >
+                            <XIcon className="size-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {formOpen && activeForm?.mode === "dice" && npc?.attributes?.length ? (
+                      <div className="bg-muted/40 mt-3 grid gap-2 rounded-md p-2">
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <AttributeSelect
+                            label="玩家属性"
+                            attributes={playerAttributes}
+                            value={playerAttributeId}
+                            onChange={setPlayerAttributeId}
+                          />
+                          <AttributeSelect
+                            label={`${npc.name} 属性`}
+                            attributes={npc.attributes}
+                            value={npcAttributeByTask[task.id] || npc.attributes[0]!.id}
+                            onChange={(value) =>
+                              setNpcAttributeByTask((current) => ({ ...current, [task.id]: value }))
+                            }
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 text-xs"
+                            disabled={busyTaskId === task.id}
+                            onClick={() => runPlayerDiceCheck(task)}
+                          >
+                            {busyTaskId === task.id ? "检定中..." : "投骰"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="size-7"
+                            onClick={() => setActiveForm(undefined)}
+                          >
+                            <XIcon className="size-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {topic.diceChecks
+                ?.filter((check) => check.npcId === participant.id)
+                .slice(-3)
+                .map((check) => (
+                  <div
+                    key={check.id}
+                    className="text-muted-foreground rounded-md border px-3 py-2 text-xs"
+                  >
+                    {check.npcName} 检定：玩家 {check.playerAttributeName} {check.playerRoll}+
+                    {check.playerAttributeValue}={check.playerTotal}；NPC {check.npcAttributeName}{" "}
+                    {check.npcRoll}+{check.npcAttributeValue}={check.npcTotal}。{check.dmResult}
+                  </div>
+                ))}
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="pointer-events-auto flex min-h-10 items-center gap-3 rounded-md border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
+          <div className="min-w-0 flex-1">
+            {finalScene ? (
+              <div className="truncate">
+                <span className="font-medium">DM 场景：</span>
+                <span className="text-muted-foreground">{finalScene}</span>
+              </div>
+            ) : (
+              <div className="font-medium">场景与任务</div>
+            )}
+          </div>
+          <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5">
+            {pendingRequests.length + tasks.filter((task) => task.status === "open").length}
+          </span>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-7 shrink-0"
+            onClick={() => setExpanded(true)}
+            aria-label="展开场景与任务面板"
+          >
+            <ChevronDownIcon className="size-4" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

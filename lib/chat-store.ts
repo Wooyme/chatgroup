@@ -32,6 +32,7 @@ import {
   DEFAULT_OPENROUTER_MODEL_ID,
   DEFAULT_OPENROUTER_MODEL_NAME,
 } from "@/lib/ai-providers";
+import { getTopicSystemPanelId, type TopicSystemPanel } from "@/lib/topic-system-panels";
 
 type WorkspaceState = {
   topics: Record<string, Topic>;
@@ -125,6 +126,7 @@ type WorkspaceState = {
     },
   ) => void;
   setActiveTopic: (topicId: string) => void;
+  setActiveTopicPanel: (topicId: string, panel: TopicSystemPanel) => void;
   setActiveChat: (chatId: string) => void;
   setChatMessages: (chatId: string, rows: StoredMessageRow[]) => void;
   upsertChatMessage: (chatId: string, row: StoredMessageRow) => void;
@@ -392,12 +394,6 @@ const createInitialState = () => {
 
 const initialState = createInitialState();
 
-const chooseFirstChat = (
-  topics: Record<string, Topic>,
-  chats: Record<string, ChatSession>,
-  topicId: string,
-) => topics[topicId]?.chatIds.find((chatId) => chats[chatId]) ?? "";
-
 const selectParticipants = (
   topic: Topic,
   ais: Record<string, AiParticipant>,
@@ -466,7 +462,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             ...Object.fromEntries(sessions.map((session) => [session.id, session])),
           },
           activeTopicId: topicId,
-          activeChatId: "",
+          activeChatId: getTopicSystemPanelId(topicId, "recruitment"),
         }));
 
         return { topicId, chatId: "", sessionIds: sessions.map((session) => session.id) };
@@ -497,7 +493,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           chats: { ...state.chats, [chat.id]: chat },
           messages: { ...state.messages, [chat.id]: [] },
           activeTopicId: topicId,
-          activeChatId: chat.id,
+          activeChatId: getTopicSystemPanelId(topicId, "welcome"),
         }));
         return topicId;
       },
@@ -542,7 +538,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
 
           const remainingTopicId = Object.keys(topics)[0];
           if (!remainingTopicId) return createInitialState();
-          const activeChatId = chooseFirstChat(topics, chats, remainingTopicId);
+          const activeChatId = getTopicSystemPanelId(remainingTopicId, "welcome");
           return {
             topics,
             ais,
@@ -1290,11 +1286,18 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         });
       },
       setActiveTopic: (topicId) => {
-        const { topics, chats } = get();
+        const { topics } = get();
         if (!topics[topicId]) return;
         set({
           activeTopicId: topicId,
-          activeChatId: chooseFirstChat(topics, chats, topicId),
+          activeChatId: getTopicSystemPanelId(topicId, "welcome"),
+        });
+      },
+      setActiveTopicPanel: (topicId, panel) => {
+        if (!get().topics[topicId]) return;
+        set({
+          activeTopicId: topicId,
+          activeChatId: getTopicSystemPanelId(topicId, panel),
         });
       },
       setActiveChat: (chatId) => {

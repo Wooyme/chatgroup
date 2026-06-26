@@ -3,11 +3,14 @@
 import type * as React from "react";
 import {
   BotIcon,
+  ClipboardListIcon,
+  HomeIcon,
   MessageSquareIcon,
   MessagesSquareIcon,
   PencilIcon,
   PlusIcon,
   TrashIcon,
+  UserRoundSearchIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +34,7 @@ import {
   DEFAULT_OPENROUTER_MODEL_NAME,
   getModelDisplayName,
 } from "@/lib/ai-providers";
+import { getTopicSystemPanelId } from "@/lib/topic-system-panels";
 import type { AiParticipant } from "@/lib/chat-types";
 
 const describeAiChoices = (ais: AiParticipant[]) =>
@@ -110,6 +114,7 @@ export function TopicWorkspaceSidebar({
   const renameChat = useChatWorkspaceStore((state) => state.renameChat);
   const deleteChat = useChatWorkspaceStore((state) => state.deleteChat);
   const setActiveTopic = useChatWorkspaceStore((state) => state.setActiveTopic);
+  const setActiveTopicPanel = useChatWorkspaceStore((state) => state.setActiveTopicPanel);
   const setActiveChat = useChatWorkspaceStore((state) => state.setActiveChat);
 
   const topicList = Object.values(topics).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -121,6 +126,13 @@ export function TopicWorkspaceSidebar({
     .map((chatId) => chats[chatId])
     .filter(Boolean)
     .sort((a, b) => b.updatedAt - a.updatedAt);
+  const welcomePanelId = activeTopic ? getTopicSystemPanelId(activeTopic.id, "welcome") : "";
+  const topicCreationPanelId = activeTopic
+    ? getTopicSystemPanelId(activeTopic.id, "topic-creation")
+    : "";
+  const recruitmentPanelId = activeTopic
+    ? getTopicSystemPanelId(activeTopic.id, "recruitment")
+    : "";
 
   const editTopic = async (topicId: string, currentTitle: string) => {
     const title = await modal.prompt({
@@ -402,6 +414,53 @@ export function TopicWorkspaceSidebar({
               </Button>
             </div>
             <SidebarMenu>
+              {activeTopic ? (
+                <>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={activeChatId === welcomePanelId}
+                      onClick={() => setActiveTopicPanel(activeTopic.id, "welcome")}
+                      tooltip="主题 Welcome"
+                    >
+                      <HomeIcon />
+                      <span>Welcome</span>
+                      <span className="bg-muted text-muted-foreground ms-auto rounded px-1.5 py-0.5 text-[10px] font-medium">
+                        固定
+                      </span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  {activeTopic.roleplay ? (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        isActive={activeChatId === topicCreationPanelId}
+                        onClick={() => setActiveTopicPanel(activeTopic.id, "topic-creation")}
+                        tooltip="主题创建助手"
+                      >
+                        <ClipboardListIcon />
+                        <span>主题创建助手</span>
+                        <span className="bg-muted text-muted-foreground ms-auto rounded px-1.5 py-0.5 text-[10px] font-medium">
+                          固定
+                        </span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ) : null}
+                  {activeTopic.recruitment ? (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        isActive={activeChatId === recruitmentPanelId}
+                        onClick={() => setActiveTopicPanel(activeTopic.id, "recruitment")}
+                        tooltip="DM 招募群成员"
+                      >
+                        <UserRoundSearchIcon />
+                        <span>DM 招募群成员</span>
+                        <span className="bg-muted text-muted-foreground ms-auto rounded px-1.5 py-0.5 text-[10px] font-medium">
+                          固定
+                        </span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ) : null}
+                </>
+              ) : null}
               {chatList.map((chat) => (
                 <SidebarMenuItem key={chat.id}>
                   <SidebarMenuButton

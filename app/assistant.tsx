@@ -16,6 +16,7 @@ import {
 import { useNpcCreationRunner } from "@/hooks/use-npc-creation-runner";
 import { useNpcProgressionRunner } from "@/hooks/use-npc-progression-runner";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
+import { parseTopicSystemPanelId } from "@/lib/topic-system-panels";
 
 export const Assistant = () => {
   const activeTopicId = useChatWorkspaceStore((state) => state.activeTopicId);
@@ -26,6 +27,17 @@ export const Assistant = () => {
   const npcProgressionSessions = useChatWorkspaceStore((state) => state.npcProgressionSessions);
   const modal = useWorkspaceModal();
   const [creatingTopic, setCreatingTopic] = useState(false);
+  const systemPanel = parseTopicSystemPanelId(activeChatId);
+  const activePageTitle =
+    systemPanel?.panel === "welcome"
+      ? "Welcome"
+      : systemPanel?.panel === "topic-creation"
+        ? "主题创建助手"
+        : systemPanel?.panel === "recruitment"
+          ? "DM 招募群成员"
+          : chat
+            ? `${chat.title} · ${chat.participants.map((ai) => ai.name).join("、")}`
+            : "会话";
 
   useNpcCreationRunner(npcCreationSessions);
   useNpcProgressionRunner(npcProgressionSessions);
@@ -51,11 +63,7 @@ export const Assistant = () => {
                 <BreadcrumbSeparator className="hidden md:block" />
                 <BreadcrumbItem className="min-w-0">
                   <BreadcrumbPage className="max-w-56 truncate">
-                    {creatingTopic
-                      ? "主题创建助手"
-                      : `${chat?.title ?? "会话"}${
-                          chat ? ` · ${chat.participants.map((ai) => ai.name).join("、")}` : ""
-                        }`}
+                    {creatingTopic ? "主题创建助手" : activePageTitle}
                   </BreadcrumbPage>
                 </BreadcrumbItem>
               </BreadcrumbList>

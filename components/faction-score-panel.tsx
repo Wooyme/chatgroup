@@ -9,12 +9,12 @@ export function FactionScorePanel({
   chat,
 }: {
   factionSystem: FactionSystem;
-  chat: ChatSession;
+  chat?: ChatSession;
 }) {
   const winningFaction = factionSystem.winningFactionId
     ? factionSystem.factions.find((faction) => faction.id === factionSystem.winningFactionId)
     : undefined;
-  const latestEvent = chat.factionScoreEvents?.at(-1);
+  const latestEvent = chat?.factionScoreEvents?.at(-1);
 
   return (
     <section className="border-b bg-background px-3 py-2">

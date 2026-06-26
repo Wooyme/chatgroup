@@ -288,16 +288,20 @@ function SceneSetupGate({
   const [objection, setObjection] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [sceneRetry, setSceneRetry] = useState(0);
+  const sceneRequestKeyRef = useRef("");
 
   useEffect(() => {
-    if (!setup || setup.status !== "pending" || busy) return;
-    if (error) return;
-    let cancelled = false;
+    if (!setup || setup.status !== "pending") return;
+    const requestKey = `${topicContext.chat.id}:${setup.npcId}:${setup.taskId ?? "none"}:${sceneRetry}`;
+    if (sceneRequestKeyRef.current === requestKey) return;
+    sceneRequestKeyRef.current = requestKey;
+    let active = true;
     setBusy(true);
     setError("");
     void requestSceneProposal(topicContext, participant, task)
       .then((scene) => {
-        if (cancelled) return;
+        if (!active) return;
         setSceneSetup(topicContext.chat.id, {
           ...setup,
           status: "proposed",
@@ -305,27 +309,22 @@ function SceneSetupGate({
         });
       })
       .catch((sceneError: unknown) => {
-        if (!cancelled) {
+        if (active) {
+          sceneRequestKeyRef.current = "";
           setError(sceneError instanceof Error ? sceneError.message : "DM 场景生成失败");
         }
       })
       .finally(() => {
-        if (!cancelled) setBusy(false);
+        if (active) setBusy(false);
       });
     return () => {
-      cancelled = true;
+      active = false;
     };
-  }, [busy, error, participant, setSceneSetup, setup, task, topicContext]);
+  }, [participant, sceneRetry, setSceneSetup, setup, task, topicContext]);
 
   if (!setup || setup.status === "final") {
     return (
       <>
-        {setup?.finalScene ? (
-          <div className="border-b bg-muted/30 px-4 py-2 text-xs leading-relaxed">
-            <span className="font-medium">DM 场景：</span>
-            {setup.finalScene}
-          </div>
-        ) : null}
         <NpcFirstMessageStarter topicContext={topicContext} />
         {children}
       </>
@@ -386,6 +385,20 @@ function SceneSetupGate({
           <Button type="button" disabled={busy || !setup.dmScene} onClick={acceptScene}>
             接受场景
           </Button>
+          {error ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                sceneRequestKeyRef.current = "";
+                setError("");
+                setSceneRetry((current) => current + 1);
+              }}
+            >
+              重新生成
+            </Button>
+          ) : null}
           {!setup.objectionUsed ? (
             <Button
               type="button"
