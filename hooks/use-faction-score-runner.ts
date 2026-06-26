@@ -16,7 +16,6 @@ export function useFactionScoreRunner(topicContext: TopicContext) {
 
   useAuiEvent("thread.runEnd", () => {
     if (running.current) return;
-    if (topicContext.chat.mode !== "group") return;
     if (!topicContext.topic.roleplay?.factionSystem) return;
     if (topicContext.topic.roleplay.factionSystem.winningFactionId) return;
 
@@ -46,7 +45,7 @@ async function scoreFactionProgress(topicContext: TopicContext) {
     body: JSON.stringify({
       responseMode: "text",
       system: [
-        "你是语C群的主持人/DM，负责根据刚结束的一轮群聊更新阵营分数。",
+        "你是语C游戏的主持人/DM，负责根据刚结束的一轮单聊更新阵营分数。",
         "你只能基于实际聊天内容、阵营胜利条件和关键节点给分。",
         "每个阵营本轮分数变化建议在 -5 到 10 之间，除非明确触发重大关键节点。",
         "如果没有任何阵营推进，返回空 deltas。",
@@ -54,14 +53,14 @@ async function scoreFactionProgress(topicContext: TopicContext) {
       ].join("\n"),
       prompt: [
         `主题：${topic.title}`,
-        `群主角色：${topic.roleplay.playerRole}`,
+        `玩家角色：${topic.roleplay.playerRole}`,
         `玩家阵营：${topic.roleplay.playerFaction}`,
         "阵营状态：",
         ...factionSystem.factions.map(
           (faction) =>
             `- id=${faction.id} name=${faction.name} score=${faction.currentScore}/${faction.victoryScore} strength=${faction.strength} victory=${faction.victoryCondition} future=${faction.futureMilestones.join("、")}`,
         ),
-        "群聊角色：",
+        "当前对话角色：",
         ...chat.participants.map(
           (participant) =>
             `- ${participant.name}：${participant.role}${
@@ -108,7 +107,7 @@ function normalizeScoreResponse(
         factionId: faction.id,
         factionName: faction.name,
         delta,
-        reason: getString(item.reason) || "本轮群聊推进了阵营目标。",
+        reason: getString(item.reason) || "本轮对话推进了阵营目标。",
         ...(getString(item.milestone) && { milestone: getString(item.milestone) }),
       };
     })

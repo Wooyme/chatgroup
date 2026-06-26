@@ -61,6 +61,19 @@ export const ATTRIBUTE_TEMPLATES: AttributeTemplate[] = [
       makeAttribute("stress", "压力", "当前心理和工作负荷，越高越危险。", 4, "模拟经营游戏"),
     ],
   },
+  {
+    id: "dnd",
+    name: "DND",
+    description: "适合经典奇幻、社交检定、冒险探索和阵营任务。",
+    attributes: [
+      makeAttribute("strength", "力量", "肉体力量、近战压制和强行突破。", 10, "DND"),
+      makeAttribute("dexterity", "敏捷", "闪避、潜行、精细动作和先手反应。", 10, "DND"),
+      makeAttribute("constitution", "体质", "耐力、抗性、伤病承受和持续行动。", 10, "DND"),
+      makeAttribute("intelligence", "智力", "知识、调查、推理和法术理解。", 10, "DND"),
+      makeAttribute("wisdom", "感知", "洞察、直觉、意志和环境判断。", 10, "DND"),
+      makeAttribute("charisma", "魅力", "说服、欺瞒、威吓和个人影响力。", 10, "DND"),
+    ],
+  },
 ];
 
 export function mergeAttributeTemplates(templateIds: string[]) {

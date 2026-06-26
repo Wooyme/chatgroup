@@ -143,8 +143,8 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
       `阵营模板：${profile.factionSystem.template}`,
       `玩家阵营：${profile.playerFaction}`,
       `属性模板：${profile.attributeSystem.templates.join("、")}`,
-      `群主角色：${profile.playerRole}`,
-      `群主风评：${profile.reputation}`,
+      `玩家角色：${profile.playerRole}`,
+      `玩家风评：${profile.reputation}`,
       profile.notes ? `补充设定：${profile.notes}` : undefined,
     ]
       .filter(Boolean)
@@ -219,7 +219,7 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
   const acceptFactionDraft = () => {
     append(
       makeUserMessage("阵营草案确认"),
-      makeAssistantMessage("你的角色属于哪个阵营？这会影响 NPC 和主群冲突关系。"),
+      makeAssistantMessage("你的角色属于哪个阵营？这会影响 NPC 和主题冲突关系。"),
     );
     setStep("playerFaction");
   };
@@ -269,7 +269,7 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
     setProfile(nextProfile);
     append(
       makeUserMessage(value || "没有额外补充。"),
-      makeAssistantMessage("我先总结成群设定。你审核一下，确认后我会创建群聊并开始找其他玩家。"),
+      makeAssistantMessage("我先总结成主题设定。你审核一下，确认后我会创建主题并开始找其他玩家。"),
     );
     setStep("review");
   };
@@ -290,7 +290,7 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
       <div className="flex h-12 shrink-0 items-center justify-between border-b px-4">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold">主题创建助手</div>
-          <div className="text-muted-foreground truncate text-xs">像开群一样创建语C世界</div>
+          <div className="text-muted-foreground truncate text-xs">像 IM 一样创建语C世界</div>
         </div>
         <Button type="button" variant="ghost" size="icon" onClick={onCancel} aria-label="关闭">
           <XIcon className="size-4" />
@@ -411,7 +411,7 @@ export function ThemeCreationAssistant({ onCancel, onCreated }: ThemeCreationAss
               </div>
               <Button type="button" className="w-fit gap-2" onClick={approve}>
                 <CheckIcon className="size-4" />
-                同意并创建群聊
+                同意并创建主题
               </Button>
             </div>
           ) : null}
@@ -597,13 +597,13 @@ async function generateFactionSystem({
     body: JSON.stringify({
       responseMode: "text",
       system: [
-        "你是语C群的主持人/DM，正在和群主创建阵营系统。",
+        "你是语C主题的主持人/DM，正在和玩家创建阵营系统。",
         "你要提出阵营强度、初始分数、叙事影响力、胜利条件、已发生关键节点和未来关键节点。",
         "强度是 1-5 的整数，同时影响初始分数和叙事地位。",
         "必须返回严格 JSON，不要 Markdown，不要解释。",
       ].join("\n"),
       prompt: [
-        `群主角色：${playerRole}`,
+        `玩家角色：${playerRole}`,
         `世界观：${worldView}`,
         `阵营模板：${template}`,
         current ? `当前草案：${JSON.stringify(current)}` : undefined,

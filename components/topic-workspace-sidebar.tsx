@@ -8,7 +8,6 @@ import {
   PencilIcon,
   PlusIcon,
   TrashIcon,
-  UsersIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +31,7 @@ import {
   DEFAULT_OPENROUTER_MODEL_NAME,
   getModelDisplayName,
 } from "@/lib/ai-providers";
-import type { AiParticipant, ChatMode } from "@/lib/chat-types";
+import type { AiParticipant } from "@/lib/chat-types";
 
 const describeAiChoices = (ais: AiParticipant[]) =>
   ais.map((ai) => `${ai.name}（${ai.role}）`).join("\n");
@@ -222,17 +221,17 @@ export function TopicWorkspaceSidebar({
     }
   };
 
-  const addChat = async (mode: ChatMode) => {
+  const addChat = async () => {
     if (!activeTopic || aiList.length === 0) return;
     const values = await modal.form({
-      title: mode === "group" ? "创建群聊" : "创建单聊",
+      title: "创建单聊",
       fields: [
         {
           name: "participantIds",
-          label: mode === "group" ? "选择群聊 AI" : "选择单聊 AI",
+          label: "选择单聊 AI",
           type: "choice",
-          choiceMode: mode === "group" ? "multiple" : "single",
-          defaultValues: mode === "group" ? aiList.map((ai) => ai.id) : [aiList[0]!.id],
+          choiceMode: "single",
+          defaultValues: [aiList[0]!.id],
           options: aiList.map((ai) => ({
             value: ai.id,
             label: ai.name,
@@ -255,7 +254,12 @@ export function TopicWorkspaceSidebar({
       });
       return;
     }
-    const chatId = createChat(activeTopic.id, mode, getFormText(values, "title"), participantIds);
+    const chatId = createChat(
+      activeTopic.id,
+      "dialog",
+      getFormText(values, "title"),
+      participantIds,
+    );
     if (!chatId) {
       await modal.alert({
         title: "无法创建会话",
@@ -292,7 +296,7 @@ export function TopicWorkspaceSidebar({
           </div>
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold">语C工作区</div>
-            <div className="text-muted-foreground truncate text-xs">主题、AI 与群组对话</div>
+            <div className="text-muted-foreground truncate text-xs">主题、AI 与单聊</div>
           </div>
         </div>
       </SidebarHeader>
@@ -384,28 +388,17 @@ export function TopicWorkspaceSidebar({
         <SidebarGroup className="min-h-0 flex-1">
           <SidebarGroupLabel>当前主题会话</SidebarGroupLabel>
           <SidebarGroupContent className="flex flex-col gap-2">
-            <div className="grid grid-cols-2 gap-1 px-1">
+            <div className="grid gap-1 px-1">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="h-8 justify-start gap-1.5 rounded-md px-2 text-xs"
-                onClick={() => addChat("dialog")}
+                onClick={() => addChat()}
                 disabled={!activeTopic || aiList.length === 0}
               >
                 <BotIcon className="size-3.5" />
                 单聊
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 justify-start gap-1.5 rounded-md px-2 text-xs"
-                onClick={() => addChat("group")}
-                disabled={!activeTopic || aiList.length === 0}
-              >
-                <UsersIcon className="size-3.5" />
-                群聊
               </Button>
             </div>
             <SidebarMenu>
@@ -416,17 +409,10 @@ export function TopicWorkspaceSidebar({
                     onClick={() => setActiveChat(chat.id)}
                     tooltip={`${chat.title} · ${chat.participants.map((ai) => ai.name).join("、")}`}
                   >
-                    {chat.mode === "group" ? <UsersIcon /> : <BotIcon />}
+                    <BotIcon />
                     <span>{chat.title}</span>
-                    <span
-                      className={cn(
-                        "ms-auto rounded px-1.5 py-0.5 text-[10px] font-medium",
-                        chat.mode === "group"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground",
-                      )}
-                    >
-                      {chat.mode === "group" ? "群聊" : (chat.participants[0]?.name ?? "单聊")}
+                    <span className="bg-muted text-muted-foreground ms-auto rounded px-1.5 py-0.5 text-[10px] font-medium">
+                      {chat.participants[0]?.name ?? "单聊"}
                     </span>
                   </SidebarMenuButton>
                   <SidebarMenuAction

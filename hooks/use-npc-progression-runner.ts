@@ -4,7 +4,6 @@ import { useEffect, useRef } from "react";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
 import type {
   AiParticipant,
-  ChatSession,
   NpcProgressionSession,
   RelationshipTask,
   RelationshipTaskDirection,
@@ -17,6 +16,8 @@ type TaskDraft = {
   direction: RelationshipTaskDirection;
   request: string;
   stake: string;
+  lore: string;
+  visibleHint: string;
   suggestedApproach: string;
 };
 
@@ -65,9 +66,9 @@ async function runTaskAssignmentSession(sessionId: string) {
   try {
     const text = await requestText(
       buildDmSystemPrompt(context.topic),
-      buildAssignmentPrompt(context.topic, context.chat, context.session),
+      buildAssignmentPrompt(context.topic, context.participants, context.session),
     );
-    const tasks = normalizeTasks(text, context.chat, context.session);
+    const tasks = normalizeTasks(text, context.topic, context.participants, context.session);
     useChatWorkspaceStore.getState().appendNpcProgressionMessage(sessionId, {
       role: "dm",
       name: "主持人",
@@ -92,16 +93,19 @@ function getAssignmentContext(sessionId: string):
   | {
       session: NpcProgressionSession;
       topic: Topic;
-      chat: ChatSession;
+      participants: AiParticipant[];
     }
   | undefined {
   const state = useChatWorkspaceStore.getState();
   const session = state.npcProgressionSessions[sessionId];
   if (!session) return undefined;
   const topic = state.topics[session.topicId];
-  const chat = state.chats[session.groupChatId];
-  if (!topic || !chat) return undefined;
-  return { session, topic, chat };
+  if (!topic) return undefined;
+  const participants = topic.aiIds
+    .map((aiId) => state.ais[aiId])
+    .filter((ai): ai is AiParticipant => Boolean(ai) && ai.status !== "left");
+  if (participants.length === 0) return undefined;
+  return { session, topic, participants };
 }
 
 function buildTopicSummary(topic: Topic) {
@@ -152,16 +156,20 @@ function formatNpc(ai: AiParticipant) {
     .join("；");
 }
 
-function buildAssignmentPrompt(topic: Topic, chat: ChatSession, session: NpcProgressionSession) {
-  const openTasks = chat.relationshipTasks?.filter((task) => task.status === "open") ?? [];
+function buildAssignmentPrompt(
+  topic: Topic,
+  participants: AiParticipant[],
+  session: NpcProgressionSession,
+) {
+  const openTasks = topic.relationshipTasks?.filter((task) => task.status === "open") ?? [];
   const focusNpc = session.focusNpcId
-    ? chat.participants.find((participant) => participant.id === session.focusNpcId)
+    ? participants.find((participant) => participant.id === session.focusNpcId)
     : undefined;
 
   return [
     `群设定：\n${buildTopicSummary(topic)}`,
     "NPC 列表：",
-    ...(focusNpc ? [formatNpc(focusNpc)] : chat.participants.map(formatNpc)),
+    ...(focusNpc ? [formatNpc(focusNpc)] : participants.map(formatNpc)),
     openTasks.length > 0 ? "当前未完成任务：" : undefined,
     ...openTasks.map(
       (task) => `- ${task.npcName}：${task.direction}；诉求=${task.request}；利害=${task.stake}`,
@@ -170,8 +178,9 @@ function buildAssignmentPrompt(topic: Topic, chat: ChatSession, session: NpcProg
     session.purpose === "initial_tasks"
       ? "请派发第一轮任务，必须覆盖每个 NPC。每个 NPC 至少一条任务，方向可以 npc_to_player 或 player_to_npc，但整体要有双向关系。"
       : "请只给指定 NPC 补发一条新任务，不要重复当前未完成任务。",
+    "每个任务必须附带一段能帮助带入的世界观/lore。npc_to_player 的 visibleHint 必须隐晦，不能暴露 NPC 的真实诉求；player_to_npc 可以直接说明玩家目标。",
     "必须返回严格 JSON，不要 Markdown，不要解释。",
-    '返回格式：{"tasks":[{"npcId":"必须使用 NPC id","npcName":"NPC 名称","direction":"npc_to_player 或 player_to_npc","request":"需要对方同意的具体事项","stake":"为什么这件事重要/失败代价","suggestedApproach":"建议如何在语C中推进"}]}',
+    '返回格式：{"tasks":[{"npcId":"必须使用 NPC id","npcName":"NPC 名称","direction":"npc_to_player 或 player_to_npc","request":"需要对方同意的具体事项","stake":"为什么这件事重要/失败代价","lore":"与任务相关的一段世界观说明","visibleHint":"展示给玩家的任务提示","suggestedApproach":"建议如何在语C中推进"}]}',
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -179,16 +188,17 @@ function buildAssignmentPrompt(topic: Topic, chat: ChatSession, session: NpcProg
 
 function normalizeTasks(
   text: string,
-  chat: ChatSession,
+  topic: Topic,
+  participants: AiParticipant[],
   session: NpcProgressionSession,
 ): RelationshipTask[] {
   const parsed = parseJsonObject(text);
   const rawTasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
   const participantsById = new Map(
-    chat.participants.map((participant) => [participant.id, participant]),
+    participants.map((participant) => [participant.id, participant]),
   );
   const existingByNpc = new Set(
-    (chat.relationshipTasks ?? [])
+    (topic.relationshipTasks ?? [])
       .filter((task) => task.status === "open")
       .map((task) => `${task.npcId}:${task.request}`),
   );
@@ -210,14 +220,22 @@ function normalizeTasks(
         direction,
         request,
         stake: getString(item.stake) || "这会影响双方关系和后续剧情。",
+        lore:
+          getString(item.lore) ||
+          `${npc.name} 的处境与「${topic.title}」的局势纠缠在一起，这次互动会改变双方在局内的位置。`,
+        visibleHint:
+          getString(item.visibleHint) ||
+          (direction === "npc_to_player"
+            ? `${npc.name}似乎有什么事想和你谈。`
+            : `你需要让${npc.name}同意：${request}`),
         suggestedApproach: getString(item.suggestedApproach) || "通过一次直接的语C互动推进。",
       };
     })
     .filter((task): task is TaskDraft => Boolean(task));
 
   const neededParticipants = session.focusNpcId
-    ? chat.participants.filter((participant) => participant.id === session.focusNpcId)
-    : chat.participants;
+    ? participants.filter((participant) => participant.id === session.focusNpcId)
+    : participants;
   for (const participant of neededParticipants) {
     if (drafts.some((task) => task.npcId === participant.id)) continue;
     drafts.push({
@@ -226,6 +244,8 @@ function normalizeTasks(
       direction: "npc_to_player",
       request: "同意进行一次私下会面",
       stake: "这会决定双方是否能建立直接关系。",
+      lore: `${participant.name} 所在阵营最近在「${topic.title}」中承受压力，需要借一次私下会面判断玩家的真实立场。`,
+      visibleHint: `${participant.name}似乎有什么事想和你谈。`,
       suggestedApproach: "让 NPC 在单聊中提出具体理由和交换条件。",
     });
   }

@@ -29,24 +29,22 @@ export function WorkspaceMain({
         onCancel={onCloseTopicCreator}
         onCreated={(chatId) => {
           onCloseTopicCreator();
-          setActiveChat(chatId);
+          if (chatId) setActiveChat(chatId);
         }}
       />
     );
   }
 
-  if (topic && chat?.recruitment) {
+  if (topic?.recruitment && !chat) {
     return (
       <NpcRecruitmentWorkspace
         topic={topic}
-        chat={chat}
-        sessions={chat.recruitment.sessionIds
+        sessions={topic.recruitment.sessionIds
           .map((sessionId) => npcCreationSessions[sessionId])
           .filter((session): session is NpcCreationSession => Boolean(session))}
         progressionSessions={Object.values(npcProgressionSessions).filter(
-          (session) => session.groupChatId === chat.id,
+          (session) => session.topicId === topic.id,
         )}
-        groupChat={<TopicChatRuntime topic={topic} chat={chat} />}
       />
     );
   }
@@ -59,7 +57,7 @@ export function WorkspaceMain({
 }
 
 function TopicChatRuntime({ topic, chat }: { topic: Topic; chat: ChatSession }) {
-  const factionSystem = chat.mode === "group" ? topic.roleplay?.factionSystem : undefined;
+  const factionSystem = topic.roleplay?.factionSystem;
   return (
     <div className="flex h-full min-h-0 flex-col">
       {factionSystem ? <FactionScorePanel factionSystem={factionSystem} chat={chat} /> : null}
@@ -73,16 +71,17 @@ function TopicChatRuntime({ topic, chat }: { topic: Topic; chat: ChatSession }) 
               title: topic.title,
               description: topic.description,
               roleplay: topic.roleplay,
+              relationshipTasks: topic.relationshipTasks,
+              consentRequests: topic.consentRequests,
+              diceChecks: topic.diceChecks,
             },
             chat: {
               id: chat.id,
               title: chat.title,
               mode: chat.mode,
               participants: chat.participants,
-              relationshipTasks: chat.relationshipTasks,
-              consentRequests: chat.consentRequests,
-              diceChecks: chat.diceChecks,
               toolCallCounts: chat.toolCallCounts,
+              sceneSetup: chat.sceneSetup,
             },
           }}
         />

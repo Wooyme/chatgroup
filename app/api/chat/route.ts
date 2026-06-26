@@ -1,8 +1,6 @@
 import { frontendTools } from "@assistant-ui/react-ai-sdk";
 import {
   convertToModelMessages,
-  createUIMessageStream,
-  createUIMessageStreamResponse,
   generateText,
   type JSONSchema7,
   type ModelMessage,
@@ -78,11 +76,11 @@ const formatRelationshipTasks = (
 ) => {
   if (!topicContext || !participant) return "";
   const tasks =
-    topicContext.chat.relationshipTasks?.filter(
+    topicContext.topic.relationshipTasks?.filter(
       (task) => task.npcId === participant.id && task.status === "open",
     ) ?? [];
   const pendingRequests =
-    topicContext.chat.consentRequests?.filter(
+    topicContext.topic.consentRequests?.filter(
       (request) => request.npcId === participant.id && request.status === "pending",
     ) ?? [];
   const attempts = topicContext.chat.toolCallCounts?.[participant.id] ?? 0;
@@ -118,6 +116,9 @@ const buildDialogSystemPrompt = (
         participant.gamePersona ? `游戏内人设：${participant.gamePersona}` : undefined,
         participant.faction ? `所属阵营：${participant.faction}` : undefined,
         formatParticipantProgression(participant),
+        topicContext.chat.sceneSetup?.finalScene
+          ? `本次对话 DM 场景：${topicContext.chat.sceneSetup.finalScene}`
+          : undefined,
         formatRelationshipTasks(topicContext, participant),
         `角色提示词：${participant.systemPrompt}`,
         "回复要求：",
@@ -136,55 +137,6 @@ const buildDialogSystemPrompt = (
   }
 
   return parts.join("\n\n") || undefined;
-};
-
-const buildGroupSystemPrompt = (
-  baseSystem: string | undefined,
-  topicContext: TopicContext,
-  participant: AiParticipant,
-  priorReplies: string[],
-) => {
-  const roster = topicContext.chat.participants
-    .map(
-      (ai, index) =>
-        `${index + 1}. ${ai.name}（${ai.role}${ai.faction ? `｜${ai.faction}` : ""}${
-          ai.status === "left" ? "｜已离群" : ""
-        }）：${ai.systemPrompt}`,
-    )
-    .join("\n");
-  const parts = [baseSystem?.trim(), buildTopicHeader(topicContext)].filter(Boolean) as string[];
-
-  parts.push(
-    [
-      "你正在参与一个多 AI 角色群聊，所有角色都与玩家进行语C互动。",
-      "本次只输出你当前角色的一段回复，不要替其他角色发言。",
-      `当前轮到你扮演：${participant.name}。`,
-      participant.realWorldPersona
-        ? `你的现实扮演者人设：${participant.realWorldPersona}`
-        : undefined,
-      `你的角色定位：${participant.role}`,
-      participant.gamePersona ? `你的游戏内人设：${participant.gamePersona}` : undefined,
-      participant.faction ? `你的阵营：${participant.faction}` : undefined,
-      formatParticipantProgression(participant),
-      `你的角色提示词：${participant.systemPrompt}`,
-      "群聊角色顺序：",
-      roster,
-      priorReplies.length > 0 ? "本轮前序角色回复：" : undefined,
-      priorReplies.length > 0 ? priorReplies.join("\n\n") : undefined,
-      "输出要求：",
-      `- 必须使用 \`**${participant.name}**\` 开头。`,
-      "- 只回复一段，观点要承接玩家和前序角色。",
-      "- 现实扮演者人设只影响你的表达习惯、偏好和参与方式；默认不要主动暴露现实人设。",
-      "- 始终保持你自己的口吻、视角和情绪一致性。",
-      "- 如果你有阵营，发言要体现阵营利益、胜利目标、盟友/敌对关系和当前分数压力。",
-      "- 群聊中不要调用同意申请工具；需要申请玩家同意时，应引导玩家进入单聊。",
-      "- 不要解释你在模拟群聊，不要替玩家发言。",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  );
-
-  return parts.join("\n\n");
 };
 
 const makeTools = (tools: Record<string, { description?: string; parameters: JSONSchema7 }>) => ({
@@ -213,51 +165,6 @@ const streamDialog = async ({
   return result.toUIMessageStreamResponse({
     sendReasoning: true,
   });
-};
-
-const streamGroup = ({
-  messages,
-  system,
-  tools,
-  topicContext,
-  originalMessages,
-}: {
-  messages: ModelMessage[];
-  system?: string;
-  tools: Record<string, { description?: string; parameters: JSONSchema7 }>;
-  topicContext: TopicContext;
-  originalMessages: UIMessage[];
-}) => {
-  const stream = createUIMessageStream<UIMessage>({
-    originalMessages,
-    async execute({ writer }) {
-      const priorReplies: string[] = [];
-
-      for (const participant of topicContext.chat.participants) {
-        let reply = "";
-        const result = streamText({
-          model: openrouter.chat(getParticipantModelId(participant)),
-          messages,
-          system: buildGroupSystemPrompt(system, topicContext, participant, priorReplies),
-          tools: makeTools(tools),
-          onChunk({ chunk }) {
-            if (chunk.type === "text-delta") reply += chunk.text;
-          },
-        });
-
-        for await (const chunk of result.toUIMessageStream({
-          sendReasoning: true,
-          sendStart: priorReplies.length === 0,
-          sendFinish: false,
-        })) {
-          writer.write(chunk);
-        }
-        if (reply.trim()) priorReplies.push(reply.trim());
-      }
-    },
-  });
-
-  return createUIMessageStreamResponse({ stream });
 };
 
 export async function POST(req: Request) {
@@ -291,16 +198,6 @@ export async function POST(req: Request) {
     return Response.json({ error: "messages are required for stream responses" }, { status: 400 });
   }
   const modelMessages = await convertToModelMessages(messages);
-
-  if (topicContext?.chat.mode === "group" && topicContext.chat.participants.length > 0) {
-    return streamGroup({
-      messages: modelMessages,
-      system,
-      tools,
-      topicContext,
-      originalMessages: messages,
-    });
-  }
 
   return streamDialog({
     messages: modelMessages,

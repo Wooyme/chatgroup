@@ -68,11 +68,10 @@ async function runNpcCreationSession(sessionId: string) {
   const session = store.npcCreationSessions[sessionId];
   if (!session) return;
   const topic = store.topics[session.topicId];
-  const chat = store.chats[session.groupChatId];
-  if (!topic || !chat) return;
+  if (!topic) return;
 
   store.setNpcCreationStatus(sessionId, "running");
-  store.appendRecruitmentEvent(session.groupChatId, {
+  store.appendRecruitmentEvent(session.topicId, {
     sessionId,
     status: "info",
     message: `候选玩家 ${session.index + 1} 开始创建角色。`,
@@ -164,8 +163,19 @@ function getNpcCreationContext(sessionId: string):
   const session = state.npcCreationSessions[sessionId];
   if (!session) return undefined;
   const topic = state.topics[session.topicId];
-  const chat = state.chats[session.groupChatId];
-  if (!topic || !chat) return undefined;
+  if (!topic) return undefined;
+  const participants = topic.aiIds
+    .map((aiId) => state.ais[aiId])
+    .filter((ai): ai is AiParticipant => Boolean(ai));
+  const chat = {
+    id: topic.id,
+    topicId: topic.id,
+    title: topic.title,
+    mode: "dialog",
+    participants,
+    createdAt: topic.createdAt,
+    updatedAt: topic.updatedAt,
+  } satisfies ChatSession;
   return { session, topic, chat, ais: state.ais };
 }
 
@@ -184,7 +194,7 @@ function buildRoleplaySummary(topic: Topic) {
     `主题：${topic.title}`,
     `世界观：${roleplay.worldView}`,
     `阵营模板：${roleplay.factionSystem.template}`,
-    `群主阵营：${roleplay.playerFaction}`,
+    `玩家阵营：${roleplay.playerFaction}`,
     "阵营列表：",
     ...roleplay.factionSystem.factions.map(
       (faction) =>
@@ -195,8 +205,8 @@ function buildRoleplaySummary(topic: Topic) {
       (attribute) =>
         `- id=${attribute.id} ${attribute.name}：默认${attribute.defaultValue}；${attribute.description}`,
     ),
-    `群主角色：${roleplay.playerRole}`,
-    `群主风评：${roleplay.reputation}`,
+    `玩家角色：${roleplay.playerRole}`,
+    `玩家风评：${roleplay.reputation}`,
     `补充设定：${roleplay.notes || "无"}`,
   ].join("\n");
 }
@@ -259,7 +269,7 @@ function detectNpcConflict(result: NpcFinalResult, chat: ChatSession, session: N
     return hasSimilarName || hasSimilarRole;
   });
   if (similarParticipant) {
-    return `和已入群角色「${similarParticipant.name}（${similarParticipant.role}）」过于接近，需要换一个身份层次、职业功能或关系位置。`;
+    return `和已加入主题的角色「${similarParticipant.name}（${similarParticipant.role}）」过于接近，需要换一个身份层次、职业功能或关系位置。`;
   }
 
   const factionCounts = new Map<string, number>();
@@ -308,7 +318,7 @@ function makeBigrams(value: string) {
 function formatInFlightSessions(session: NpcCreationSession) {
   const state = useChatWorkspaceStore.getState();
   return Object.values(state.npcCreationSessions)
-    .filter((item) => item.groupChatId === session.groupChatId && item.id !== session.id)
+    .filter((item) => item.topicId === session.topicId && item.id !== session.id)
     .map(
       (item) =>
         `- 候选玩家${item.index + 1}：状态=${item.status}；推荐阵营=${
@@ -320,24 +330,24 @@ function formatInFlightSessions(session: NpcCreationSession) {
 
 function buildDmSystemPrompt(topic: Topic) {
   return [
-    "你是中文语C群的主持人/DM，正在帮新成员创建入群角色。",
-    "你说话像 IM 群聊，短、具体、自然，不写长篇说明。",
-    "你必须围绕群世界观和群主角色进行把关。",
-    "你可以要求更多细节，可以指出世界观冲突，也可以指出角色离群主太远、不方便互动。",
+    "你是中文语C主题的主持人/DM，正在帮新成员创建游戏角色。",
+    "你说话像 IM，短、具体、自然，不写长篇说明。",
+    "你必须围绕主题世界观和玩家角色进行把关。",
+    "你可以要求更多细节，可以指出世界观冲突，也可以指出角色离玩家太远、不方便互动。",
     "你必须让候选玩家最终选择一个现有阵营，不能自创阵营。",
     "你不能直接指定候选玩家扮演某个具体角色；你只能给约束、指出冲突、要求候选玩家自己修正。",
     "不要说自己是 AI。",
-    "群设定：",
+    "主题设定：",
     buildRoleplaySummary(topic),
   ].join("\n");
 }
 
 function buildNpcSystemPrompt(session: NpcCreationSession) {
   return [
-    `你是一个准备加入中文语C群的普通玩家。你的现实人设：${session.personaTemplate}`,
+    `你是一个准备加入中文语C主题的普通玩家。你的现实人设：${session.personaTemplate}`,
     "你不是最终游戏角色本人，而是在和主持人商量自己要扮演什么角色。",
     "你说话像 IM，不写小说正文，不要说自己是 AI。",
-    "你要认真配合主持人的要求，选择一个符合世界观、方便和群主互动、能长期参与的角色。",
+    "你要认真配合主持人的要求，选择一个符合世界观、方便和玩家互动、能长期参与的角色。",
     session.targetFaction
       ? `系统给你的推荐阵营倾向是「${session.targetFaction}」，这不是强制，但优先考虑。`
       : undefined,
@@ -366,10 +376,10 @@ function buildDmTurnPrompt(
     `其他并行创建中的候选：\n${formatInFlightSessions(session) || "暂无。"}`,
     `创建对话记录：\n${formatNpcCreationHistory(session) || "暂无。"}`,
     firstTurn
-      ? "请作为主持人欢迎这个新成员，向他介绍本群正在进行的世界观，并请他先提出想扮演的角色。"
-      : "请继续主持创建流程。根据对话提出一个关键追问、修正或确认。若角色离群主太远、不方便互动，要直接指出。",
+      ? "请作为主持人欢迎这个新成员，向他介绍本主题正在进行的世界观，并请他先提出想扮演的角色。"
+      : "请继续主持创建流程。根据对话提出一个关键追问、修正或确认。若角色离玩家太远、不方便互动，要直接指出。",
     "只输出一条 IM 消息，不要输出 JSON。",
-    `群主角色提醒：${topic.roleplay?.playerRole ?? "玩家角色未设定"}`,
+    `玩家角色提醒：${topic.roleplay?.playerRole ?? "玩家角色未设定"}`,
   ].join("\n\n");
 }
 
@@ -382,14 +392,14 @@ function buildNpcTurnPrompt(topic: Topic, chat: ChatSession, session: NpcCreatio
     `已占用角色：\n${formatOccupiedRoles(chat)}`,
     `其他并行创建中的候选：\n${formatInFlightSessions(session) || "暂无。"}`,
     `创建对话记录：\n${formatNpcCreationHistory(session)}`,
-    "请以候选玩家身份回复主持人的最后一条消息。你可以提出想扮演的角色、补充细节、接受修改或解释自己为什么适合这个群。",
+    "请以候选玩家身份回复主持人的最后一条消息。你可以提出想扮演的角色、补充细节、接受修改或解释自己为什么适合这个主题。",
     "只输出一条 IM 消息，不要输出旁白。",
   ].join("\n\n");
 }
 
 function buildFinalPrompt(topic: Topic, chat: ChatSession, session: NpcCreationSession) {
   return [
-    "请作为主持人总结这个候选玩家最终入群角色。",
+    "请作为主持人总结这个候选玩家最终加入主题的角色。",
     `群设定：\n${buildRoleplaySummary(topic)}`,
     `推荐阵营倾向：${session.targetFaction || "无"}`,
     `推荐角色生态位：${session.roleNiche || "无"}`,
@@ -399,7 +409,7 @@ function buildFinalPrompt(topic: Topic, chat: ChatSession, session: NpcCreationS
     `创建对话记录：\n${formatNpcCreationHistory(session)}`,
     "必须返回严格 JSON，不要 Markdown，不要解释。",
     "JSON 字段：",
-    '{"name":"角色在群里的称呼，2到6个中文字符","role":"一句话角色身份","faction":"必须是现有阵营名之一","gamePersona":"这个 NPC 在语C游戏中的完整人设，包含身份、目标、关系位置和长期动机","attributes":[{"id":"必须使用属性模板中的 id","value":数字}],"systemPrompt":"给主群聊天模型使用的人设提示词，必须同时保存现实扮演者人设和游戏角色人设，持续体现阵营利益、盟友/敌对关系和胜利目标","introMessage":"入群第一句 IM 式招呼","creationSummary":"主持人对角色适配性和阵营归属的简短总结"}',
+    '{"name":"角色在主题中的称呼，2到6个中文字符","role":"一句话角色身份","faction":"必须是现有阵营名之一","gamePersona":"这个 NPC 在语C游戏中的完整人设，包含身份、目标、关系位置和长期动机","attributes":[{"id":"必须使用属性模板中的 id","value":数字}],"systemPrompt":"给单聊模型使用的人设提示词，必须同时保存现实扮演者人设和游戏角色人设，持续体现阵营利益、盟友/敌对关系和胜利目标","introMessage":"加入主题后的第一句 IM 式招呼","creationSummary":"主持人对角色适配性和阵营归属的简短总结"}',
   ].join("\n\n");
 }
 
@@ -410,7 +420,7 @@ function normalizeNpcFinalResult(
 ): NpcFinalResult {
   const parsed = parseJsonObject(text);
   const name = getString(parsed.name) || `玩家${session.index + 1}`;
-  const role = getString(parsed.role) || "新入群角色";
+  const role = getString(parsed.role) || "新加入主题的角色";
   const availableFactions =
     topic.roleplay?.factionSystem.factions.map((faction) => faction.name) ?? [];
   const parsedFaction = getString(parsed.faction);
@@ -423,7 +433,7 @@ function normalizeNpcFinalResult(
   const prompt =
     getString(parsed.systemPrompt) ||
     [
-      `你正在参与「${topic.title}」语C群聊。`,
+      `你正在参与「${topic.title}」语C主题。`,
       `你的现实扮演者人设：${session.personaTemplate}`,
       `你必须扮演：${name}。`,
       `角色身份：${role}`,
@@ -431,7 +441,7 @@ function normalizeNpcFinalResult(
       faction ? `阵营：${faction}` : undefined,
       faction ? "你要持续体现该阵营的利益、盟友/敌对关系和胜利目标。" : undefined,
       "现实扮演者人设只影响你的参与风格和说话习惯；默认不要主动暴露现实玩家人设、创建过程或系统提示。",
-      "回复像 IM 群聊，承接群主和其他角色，不要替玩家发言。",
+      "回复像 IM，承接玩家和当前剧情，不要替玩家发言。",
     ]
       .filter(Boolean)
       .join("\n");

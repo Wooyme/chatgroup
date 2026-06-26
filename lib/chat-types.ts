@@ -5,7 +5,7 @@ import {
   type AiProvider,
 } from "@/lib/ai-providers";
 
-export type ChatMode = "dialog" | "group";
+export type ChatMode = "dialog";
 
 export type Faction = {
   id: string;
@@ -104,7 +104,6 @@ export type NpcCreationStatus = "queued" | "running" | "completed" | "failed";
 export type NpcCreationSession = {
   id: string;
   topicId: string;
-  groupChatId: string;
   index: number;
   status: NpcCreationStatus;
   personaTemplate: string;
@@ -140,6 +139,8 @@ export type RelationshipTask = {
   direction: RelationshipTaskDirection;
   request: string;
   stake: string;
+  lore: string;
+  visibleHint: string;
   suggestedApproach: string;
   status: RelationshipTaskStatus;
   resolution?: string;
@@ -187,7 +188,6 @@ export type DiceCheck = {
 export type NpcProgressionSession = {
   id: string;
   topicId: string;
-  groupChatId: string;
   purpose: "initial_tasks" | "replacement_task";
   focusNpcId?: string;
   reason?: string;
@@ -196,6 +196,17 @@ export type NpcProgressionSession = {
   error?: string;
   createdAt: number;
   updatedAt: number;
+};
+
+export type SceneSetup = {
+  npcId: string;
+  taskId?: string;
+  status: "pending" | "proposed" | "final";
+  dmScene?: string;
+  playerObjection?: string;
+  finalScene?: string;
+  objectionUsed: boolean;
+  npcStarted?: boolean;
 };
 
 export type AiParticipant = {
@@ -221,6 +232,11 @@ export type Topic = {
   roleplay?: RoleplayTopicProfile;
   aiIds: string[];
   chatIds: string[];
+  recruitment?: ChatRecruitment;
+  relationshipTasks?: RelationshipTask[];
+  consentRequests?: ConsentRequest[];
+  diceChecks?: DiceCheck[];
+  taskAssignmentSessionIds?: string[];
   createdAt: number;
   updatedAt: number;
 };
@@ -231,13 +247,9 @@ export type ChatSession = {
   title: string;
   mode: ChatMode;
   participants: AiParticipant[];
-  recruitment?: ChatRecruitment;
   factionScoreEvents?: FactionScoreEvent[];
-  relationshipTasks?: RelationshipTask[];
-  consentRequests?: ConsentRequest[];
-  diceChecks?: DiceCheck[];
-  taskAssignmentSessionIds?: string[];
   toolCallCounts?: Record<string, number>;
+  sceneSetup?: SceneSetup;
   createdAt: number;
   updatedAt: number;
 };
@@ -251,17 +263,19 @@ export type StoredMessageRow<TContent extends Record<string, unknown> = Record<s
 };
 
 export type TopicContext = {
-  topic: Pick<Topic, "id" | "title" | "description" | "roleplay">;
-  chat: Pick<
-    ChatSession,
+  topic: Pick<
+    Topic,
     | "id"
     | "title"
-    | "mode"
-    | "participants"
+    | "description"
+    | "roleplay"
     | "relationshipTasks"
     | "consentRequests"
     | "diceChecks"
-    | "toolCallCounts"
+  >;
+  chat: Pick<
+    ChatSession,
+    "id" | "title" | "mode" | "participants" | "toolCallCounts" | "sceneSetup"
   >;
 };
 

@@ -21,6 +21,7 @@ import {
   type RecruitmentEvent,
   type RelationshipTask,
   type RelationshipTaskStatus,
+  type SceneSetup,
   type RoleplayTopicProfile,
   type StoredMessageRow,
   type Topic,
@@ -64,7 +65,7 @@ type WorkspaceState = {
   deleteChat: (chatId: string) => void;
   createAiAndJoinChat: (topicId: string, chatId: string, input: AiParticipantInput) => string;
   appendRecruitmentEvent: (
-    chatId: string,
+    topicId: string,
     event: Pick<RecruitmentEvent, "message" | "status" | "sessionId">,
   ) => void;
   appendNpcCreationMessage: (
@@ -87,7 +88,7 @@ type WorkspaceState = {
   completeNpcProgressionSession: (sessionId: string, input: { tasks: RelationshipTask[] }) => void;
   failNpcProgressionSession: (sessionId: string, error: string) => void;
   ensureTaskAssignmentSession: (
-    chatId: string,
+    topicId: string,
     purpose: NpcProgressionSession["purpose"],
     focusNpcId?: string,
     reason?: string,
@@ -113,6 +114,7 @@ type WorkspaceState = {
   ) => void;
   addDiceCheck: (chatId: string, input: Omit<DiceCheck, "id" | "chatId" | "createdAt">) => void;
   incrementToolCallCount: (chatId: string, npcId: string) => number;
+  setSceneSetup: (chatId: string, sceneSetup: SceneSetup) => void;
   applyFactionScoreEvent: (
     chatId: string,
     input: {
@@ -223,17 +225,9 @@ const createChatSession = (
   mode: ChatMode,
   participants: AiParticipant[],
   title?: string,
-  recruitment?: ChatRecruitment,
 ): ChatSession => {
   const timestamp = now();
-  const fallbackTitle =
-    title?.trim() ||
-    (mode === "group"
-      ? `${participants
-          .slice(0, 3)
-          .map((ai) => ai.name)
-          .join("、")} 群聊`
-      : `与 ${participants[0]?.name ?? "AI"} 对话`);
+  const fallbackTitle = title?.trim() || `与 ${participants[0]?.name ?? "AI"} 对话`;
 
   return {
     id: makeId("chat"),
@@ -241,12 +235,7 @@ const createChatSession = (
     title: fallbackTitle,
     mode,
     participants,
-    ...(recruitment && { recruitment }),
     factionScoreEvents: [],
-    relationshipTasks: [],
-    consentRequests: [],
-    diceChecks: [],
-    taskAssignmentSessionIds: [],
     toolCallCounts: {},
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -283,7 +272,6 @@ const createRecruitmentEvent = (
 
 const createNpcCreationSession = (
   topicId: string,
-  groupChatId: string,
   index: number,
   personaTemplate: string,
   targetFaction: string | undefined,
@@ -293,7 +281,6 @@ const createNpcCreationSession = (
   return {
     id: makeId("npc_session"),
     topicId,
-    groupChatId,
     index,
     status: "queued",
     personaTemplate,
@@ -324,7 +311,6 @@ const createNpcCreationSession = (
 
 const createNpcProgressionSession = (
   topicId: string,
-  groupChatId: string,
   purpose: NpcProgressionSession["purpose"],
   focusNpcId?: string,
   reason?: string,
@@ -333,7 +319,6 @@ const createNpcProgressionSession = (
   return {
     id: makeId("npc_progression"),
     topicId,
-    groupChatId,
     purpose,
     ...(focusNpcId && { focusNpcId }),
     ...(reason && { reason }),
@@ -345,7 +330,7 @@ const createNpcProgressionSession = (
         name: "系统",
         content:
           purpose === "initial_tasks"
-            ? "所有角色已入群，等待 DM 派发第一轮玩家-NPC 关系任务。"
+            ? "所有角色已加入主题，等待 DM 派发第一轮玩家-NPC 关系任务。"
             : "等待 DM 为这段玩家-NPC 关系补发新的任务。",
         createdAt: timestamp,
       },
@@ -417,30 +402,26 @@ const selectParticipants = (
   topic: Topic,
   ais: Record<string, AiParticipant>,
   participantIds: string[] | undefined,
-  mode: ChatMode,
 ) => {
   const ids = participantIds?.length ? participantIds : topic.aiIds;
   const participants = ids
     .map((id) => ais[id])
     .filter((ai): ai is AiParticipant => Boolean(ai) && isActiveParticipant(ai));
 
-  if (mode === "dialog") return participants.slice(0, 1);
-  return participants.length > 0 ? participants : topic.aiIds.map((id) => ais[id]).filter(Boolean);
+  return participants.slice(0, 1);
 };
 
 export const useChatWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set, get) => ({
       ...initialState,
-      createRoleplayTopic: ({ title, description, roleplay, groupTitle, personaTemplates }) => {
+      createRoleplayTopic: ({ title, description, roleplay, personaTemplates }) => {
         const timestamp = now();
         const topicId = makeId("topic");
-        const chatId = makeId("chat");
         const factionNames = roleplay.factionSystem.factions.map((faction) => faction.name);
         const sessions = personaTemplates.map((persona, index) =>
           createNpcCreationSession(
             topicId,
-            chatId,
             index,
             persona,
             factionNames[index % Math.max(factionNames.length, 1)],
@@ -455,26 +436,10 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           sessionIds: sessions.map((session) => session.id),
           events: [
             createRecruitmentEvent({
-              message: `群聊已创建，正在寻找 ${sessions.length} 位其他玩家。`,
+              message: `主题已创建，正在寻找 ${sessions.length} 位其他玩家。`,
               status: "info",
             }),
           ],
-        };
-        const chat: ChatSession = {
-          id: chatId,
-          topicId,
-          title: groupTitle.trim() || `${title.trim() || "新主题"} 群聊`,
-          mode: "group",
-          participants: [],
-          recruitment,
-          factionScoreEvents: [],
-          relationshipTasks: [],
-          consentRequests: [],
-          diceChecks: [],
-          taskAssignmentSessionIds: [],
-          toolCallCounts: {},
-          createdAt: timestamp,
-          updatedAt: timestamp,
         };
 
         set((state) => ({
@@ -485,23 +450,26 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
               title: title.trim() || "新主题",
               description,
               roleplay,
+              recruitment,
               aiIds: [],
-              chatIds: [chat.id],
+              chatIds: [],
+              relationshipTasks: [],
+              consentRequests: [],
+              diceChecks: [],
+              taskAssignmentSessionIds: [],
               createdAt: timestamp,
               updatedAt: timestamp,
             },
           },
-          chats: { ...state.chats, [chat.id]: chat },
-          messages: { ...state.messages, [chat.id]: [] },
           npcCreationSessions: {
             ...state.npcCreationSessions,
             ...Object.fromEntries(sessions.map((session) => [session.id, session])),
           },
           activeTopicId: topicId,
-          activeChatId: chat.id,
+          activeChatId: "",
         }));
 
-        return { topicId, chatId: chat.id, sessionIds: sessions.map((session) => session.id) };
+        return { topicId, chatId: "", sessionIds: sessions.map((session) => session.id) };
       },
       createTopic: (title) => {
         const timestamp = now();
@@ -653,18 +621,23 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         const state = get();
         const topic = state.topics[topicId];
         if (!topic) return "";
-        const participants = selectParticipants(topic, state.ais, participantIds, mode);
+        const participants = selectParticipants(topic, state.ais, participantIds);
         if (participants.length === 0) return "";
 
         const chat = createChatSession(topicId, mode, participants, title);
+        const primaryTask = topic.relationshipTasks?.find(
+          (task) => task.npcId === participants[0]!.id && task.status === "open",
+        );
         const seededChat =
-          mode === "dialog"
+          topic.roleplay && participants[0]
             ? {
                 ...chat,
-                relationshipTasks: topic.chatIds
-                  .map((chatId) => state.chats[chatId])
-                  .flatMap((item) => item?.relationshipTasks ?? [])
-                  .filter((task) => task.npcId === participants[0]!.id),
+                sceneSetup: {
+                  npcId: participants[0].id,
+                  ...(primaryTask && { taskId: primaryTask.id }),
+                  status: "pending" as const,
+                  objectionUsed: false,
+                },
               }
             : chat;
         set((current) => ({
@@ -711,7 +684,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
 
           const nextChatIds = topic.chatIds.filter((id) => id !== chatId);
           if (nextChatIds.length === 0) {
-            const participants = selectParticipants(topic, state.ais, undefined, "dialog");
+            const participants = selectParticipants(topic, state.ais, undefined);
             const replacement = createChatSession(topic.id, "dialog", participants, "AI 对话");
             nextChatIds.push(replacement.id);
             chats[replacement.id] = replacement;
@@ -763,16 +736,16 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
       },
       appendRecruitmentEvent: (chatId, event) => {
         set((state) => {
-          const chat = state.chats[chatId];
-          if (!chat?.recruitment) return state;
+          const topic = state.topics[chatId];
+          if (!topic?.recruitment) return state;
           return {
-            chats: {
-              ...state.chats,
+            topics: {
+              ...state.topics,
               [chatId]: {
-                ...chat,
+                ...topic,
                 recruitment: {
-                  ...chat.recruitment,
-                  events: [...chat.recruitment.events, createRecruitmentEvent(event)],
+                  ...topic.recruitment,
+                  events: [...topic.recruitment.events, createRecruitmentEvent(event)],
                 },
                 updatedAt: now(),
               },
@@ -843,26 +816,46 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         const session = state.npcCreationSessions[sessionId];
         if (!session || session.status === "completed") return session?.resultAiId ?? "";
         const topic = state.topics[session.topicId];
+        if (!topic) return "";
         const fallbackAttributes = topic?.roleplay
           ? createCharacterAttributes(topic.roleplay.attributeSystem.attributes)
           : undefined;
-        const aiId = get().createAiAndJoinChat(session.topicId, session.groupChatId, {
-          ...input,
-          realWorldPersona: input.realWorldPersona || session.personaTemplate,
-          status: input.status ?? "active",
-          attributes: input.attributes ?? fallbackAttributes,
+        const ai = createAiParticipant(
+          {
+            ...input,
+            realWorldPersona: input.realWorldPersona || session.personaTemplate,
+            status: input.status ?? "active",
+            attributes: input.attributes ?? fallbackAttributes,
+          },
+          topic.aiIds.length,
+        );
+        const aiId = ai.id;
+        set((current) => {
+          const latestTopic = current.topics[session.topicId];
+          if (!latestTopic) return current;
+          return {
+            ais: { ...current.ais, [ai.id]: ai },
+            topics: {
+              ...current.topics,
+              [latestTopic.id]: {
+                ...latestTopic,
+                aiIds: [...latestTopic.aiIds, ai.id],
+                updatedAt: now(),
+              },
+            },
+          };
         });
         if (!aiId) return "";
         set((current) => {
           const latestSession = current.npcCreationSessions[sessionId];
-          const chat = current.chats[session.groupChatId];
+          const latestTopic = current.topics[session.topicId];
           const ai = current.ais[aiId];
-          if (!latestSession || !chat?.recruitment || !ai) return current;
-          const recruitment = getNextRecruitment(chat.recruitment, 1, 0);
+          if (!latestSession || !latestTopic?.recruitment || !ai) return current;
+          const recruitment = getNextRecruitment(latestTopic.recruitment, 1, 0);
           const shouldAssignInitialTasks =
-            recruitment.status === "completed" && chat.participants.length > 0;
+            recruitment.status === "completed" && latestTopic.aiIds.length > 0;
           const progression = shouldAssignInitialTasks
-            ? createNpcProgressionSession(session.topicId, session.groupChatId, "initial_tasks")
+            ? createNpcProgressionSession(session.topicId, "initial_tasks")
             : undefined;
           return {
             npcCreationSessions: {
@@ -880,10 +873,10 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
                 [progression.id]: progression,
               },
             }),
-            chats: {
-              ...current.chats,
-              [session.groupChatId]: {
-                ...chat,
+            topics: {
+              ...current.topics,
+              [session.topicId]: {
+                ...latestTopic,
                 recruitment: {
                   ...recruitment,
                   events: [
@@ -891,13 +884,13 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
                     createRecruitmentEvent({
                       sessionId,
                       status: "success",
-                      message: `${input.name?.trim() || "新玩家"} 已完成角色创建并加入群聊。`,
+                      message: `${input.name?.trim() || "新玩家"} 已完成角色创建并加入主题。`,
                     }),
                   ],
                 },
                 taskAssignmentSessionIds: progression
-                  ? [...(chat.taskAssignmentSessionIds ?? []), progression.id]
-                  : (chat.taskAssignmentSessionIds ?? []),
+                  ? [...(latestTopic.taskAssignmentSessionIds ?? []), progression.id]
+                  : (latestTopic.taskAssignmentSessionIds ?? []),
                 updatedAt: now(),
               },
             },
@@ -911,9 +904,9 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           if (!session || session.status === "failed" || session.status === "completed") {
             return state;
           }
-          const chat = state.chats[session.groupChatId];
-          if (!chat?.recruitment) return state;
-          const recruitment = getNextRecruitment(chat.recruitment, 0, 1);
+          const topic = state.topics[session.topicId];
+          if (!topic?.recruitment) return state;
+          const recruitment = getNextRecruitment(topic.recruitment, 0, 1);
           return {
             npcCreationSessions: {
               ...state.npcCreationSessions,
@@ -924,10 +917,10 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
                 updatedAt: now(),
               },
             },
-            chats: {
-              ...state.chats,
-              [session.groupChatId]: {
-                ...chat,
+            topics: {
+              ...state.topics,
+              [session.topicId]: {
+                ...topic,
                 recruitment: {
                   ...recruitment,
                   events: [
@@ -991,14 +984,14 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         set((state) => {
           const session = state.npcProgressionSessions[sessionId];
           if (!session) return state;
-          const chat = state.chats[session.groupChatId];
-          if (!chat) return state;
+          const topic = state.topics[session.topicId];
+          if (!topic) return state;
           return {
-            chats: {
-              ...state.chats,
-              [chat.id]: {
-                ...chat,
-                relationshipTasks: [...(chat.relationshipTasks ?? []), ...input.tasks],
+            topics: {
+              ...state.topics,
+              [topic.id]: {
+                ...topic,
+                relationshipTasks: [...(topic.relationshipTasks ?? []), ...input.tasks],
                 updatedAt: now(),
               },
             },
@@ -1032,11 +1025,11 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           };
         });
       },
-      ensureTaskAssignmentSession: (chatId, purpose, focusNpcId, reason) => {
+      ensureTaskAssignmentSession: (topicId, purpose, focusNpcId, reason) => {
         const state = get();
-        const chat = state.chats[chatId];
-        if (!chat) return "";
-        const existing = (chat.taskAssignmentSessionIds ?? [])
+        const topic = state.topics[topicId];
+        if (!topic) return "";
+        const existing = (topic.taskAssignmentSessionIds ?? [])
           .map((sessionId) => state.npcProgressionSessions[sessionId])
           .find(
             (session) =>
@@ -1046,27 +1039,21 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
               session.focusNpcId === focusNpcId,
           );
         if (existing) return existing.id;
-        const session = createNpcProgressionSession(
-          chat.topicId,
-          chat.id,
-          purpose,
-          focusNpcId,
-          reason,
-        );
+        const session = createNpcProgressionSession(topic.id, purpose, focusNpcId, reason);
         set((current) => {
-          const latestChat = current.chats[chatId];
-          if (!latestChat) return current;
+          const latestTopic = current.topics[topicId];
+          if (!latestTopic) return current;
           return {
             npcProgressionSessions: {
               ...current.npcProgressionSessions,
               [session.id]: session,
             },
-            chats: {
-              ...current.chats,
-              [chatId]: {
-                ...latestChat,
+            topics: {
+              ...current.topics,
+              [topicId]: {
+                ...latestTopic,
                 taskAssignmentSessionIds: [
-                  ...(latestChat.taskAssignmentSessionIds ?? []),
+                  ...(latestTopic.taskAssignmentSessionIds ?? []),
                   session.id,
                 ],
                 updatedAt: now(),
@@ -1077,6 +1064,8 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         return session.id;
       },
       addConsentRequest: (chatId, input) => {
+        const topicId = get().chats[chatId]?.topicId;
+        if (!topicId) return undefined;
         const request: ConsentRequest = {
           id: makeId("consent"),
           chatId,
@@ -1090,14 +1079,14 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           createdAt: now(),
         };
         set((state) => {
-          const chat = state.chats[chatId];
-          if (!chat) return state;
+          const topic = state.topics[topicId];
+          if (!topic) return state;
           return {
-            chats: {
-              ...state.chats,
-              [chatId]: {
-                ...chat,
-                consentRequests: [...(chat.consentRequests ?? []), request],
+            topics: {
+              ...state.topics,
+              [topicId]: {
+                ...topic,
+                consentRequests: [...(topic.consentRequests ?? []), request],
                 updatedAt: now(),
               },
             },
@@ -1106,18 +1095,20 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         return request;
       },
       resolveConsentRequest: (chatId, requestId, approved, playerReaction) => {
+        const topicId = get().chats[chatId]?.topicId;
+        if (!topicId) return;
         set((state) => {
-          const chat = state.chats[chatId];
-          if (!chat) return state;
-          const request = (chat.consentRequests ?? []).find((item) => item.id === requestId);
+          const topic = state.topics[topicId];
+          if (!topic) return state;
+          const request = (topic.consentRequests ?? []).find((item) => item.id === requestId);
           if (!request || request.status !== "pending") return state;
           const taskStatus: RelationshipTaskStatus = approved ? "completed" : "failed";
           return {
-            chats: {
-              ...state.chats,
-              [chatId]: {
-                ...chat,
-                consentRequests: (chat.consentRequests ?? []).map((item) =>
+            topics: {
+              ...state.topics,
+              [topicId]: {
+                ...topic,
+                consentRequests: (topic.consentRequests ?? []).map((item) =>
                   item.id === requestId
                     ? {
                         ...item,
@@ -1127,7 +1118,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
                       }
                     : item,
                 ),
-                relationshipTasks: (chat.relationshipTasks ?? []).map((task) =>
+                relationshipTasks: (topic.relationshipTasks ?? []).map((task) =>
                   task.id === request.taskId
                     ? {
                         ...task,
@@ -1144,10 +1135,12 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             },
           };
         });
-        const request = get().chats[chatId]?.consentRequests?.find((item) => item.id === requestId);
+        const request = get().topics[topicId]?.consentRequests?.find(
+          (item) => item.id === requestId,
+        );
         if (request) {
           get().ensureTaskAssignmentSession(
-            chatId,
+            topicId,
             "replacement_task",
             request.npcId,
             approved ? "上一条 NPC 请求已获得玩家同意。" : "上一条 NPC 请求被玩家驳回。",
@@ -1155,15 +1148,16 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         }
       },
       resolveRelationshipTask: (chatId, taskId, status, resolution) => {
+        const topicId = get().chats[chatId]?.topicId ?? chatId;
         set((state) => {
-          const chat = state.chats[chatId];
-          if (!chat) return state;
+          const topic = state.topics[topicId];
+          if (!topic) return state;
           return {
-            chats: {
-              ...state.chats,
-              [chatId]: {
-                ...chat,
-                relationshipTasks: (chat.relationshipTasks ?? []).map((task) =>
+            topics: {
+              ...state.topics,
+              [topicId]: {
+                ...topic,
+                relationshipTasks: (topic.relationshipTasks ?? []).map((task) =>
                   task.id === taskId
                     ? {
                         ...task,
@@ -1178,15 +1172,17 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             },
           };
         });
-        const task = get().chats[chatId]?.relationshipTasks?.find((item) => item.id === taskId);
+        const task = get().topics[topicId]?.relationshipTasks?.find((item) => item.id === taskId);
         if (task) {
-          get().ensureTaskAssignmentSession(chatId, "replacement_task", task.npcId, resolution);
+          get().ensureTaskAssignmentSession(topicId, "replacement_task", task.npcId, resolution);
         }
       },
       addDiceCheck: (chatId, input) => {
+        const topicId = get().chats[chatId]?.topicId;
+        if (!topicId) return;
         set((state) => {
-          const chat = state.chats[chatId];
-          if (!chat) return state;
+          const topic = state.topics[topicId];
+          if (!topic) return state;
           const check: DiceCheck = {
             id: makeId("dice"),
             chatId,
@@ -1194,11 +1190,11 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             createdAt: now(),
           };
           return {
-            chats: {
-              ...state.chats,
-              [chatId]: {
-                ...chat,
-                diceChecks: [...(chat.diceChecks ?? []), check],
+            topics: {
+              ...state.topics,
+              [topicId]: {
+                ...topic,
+                diceChecks: [...(topic.diceChecks ?? []), check],
                 updatedAt: now(),
               },
             },
@@ -1226,6 +1222,22 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           };
         });
         return count;
+      },
+      setSceneSetup: (chatId, sceneSetup) => {
+        set((state) => {
+          const chat = state.chats[chatId];
+          if (!chat) return state;
+          return {
+            chats: {
+              ...state.chats,
+              [chatId]: {
+                ...chat,
+                sceneSetup,
+                updatedAt: now(),
+              },
+            },
+          };
+        });
       },
       applyFactionScoreEvent: (chatId, input) => {
         set((state) => {

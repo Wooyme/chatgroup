@@ -23,9 +23,9 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
   const resolveRelationshipTask = useChatWorkspaceStore((state) => state.resolveRelationshipTask);
   const addDiceCheck = useChatWorkspaceStore((state) => state.addDiceCheck);
   const playerAttributes = topic.roleplay?.playerAttributes ?? [];
-  const tasks = chat.relationshipTasks ?? [];
+  const tasks = topic.relationshipTasks ?? [];
   const pendingRequests =
-    chat.consentRequests?.filter((request) => request.status === "pending") ?? [];
+    topic.consentRequests?.filter((request) => request.status === "pending") ?? [];
   const [activeForm, setActiveForm] = useState<PanelFormState | undefined>();
   const [text, setText] = useState("");
   const [playerAttributeId, setPlayerAttributeId] = useState(playerAttributes[0]?.id ?? "");
@@ -166,6 +166,7 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
           {tasks.map((task) => {
             const npc = npcById.get(task.npcId);
             const formOpen = activeForm?.taskId === task.id;
+            const hiddenNpcRequest = task.direction === "npc_to_player";
             return (
               <div key={task.id} className="border-border rounded-md border p-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -182,16 +183,20 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
                   >
                     {task.status === "open"
                       ? task.direction === "npc_to_player"
-                        ? "NPC 请求玩家"
+                        ? "对方有事"
                         : "玩家请求 NPC"
                       : task.status === "completed"
                         ? "已完成"
                         : "失败"}
                   </span>
                 </div>
-                <div className="mt-1 text-sm">同意：{task.request}</div>
+                <div className="mt-1 text-sm">
+                  {hiddenNpcRequest
+                    ? task.visibleHint || `${task.npcName}似乎有什么事想和你谈。`
+                    : `同意：${task.request}`}
+                </div>
                 <div className="text-muted-foreground mt-1 text-xs leading-relaxed">
-                  {task.stake} · {task.suggestedApproach}
+                  {hiddenNpcRequest ? task.lore : `${task.stake} · ${task.suggestedApproach}`}
                 </div>
                 {task.resolution ? (
                   <div className="text-muted-foreground mt-2 text-xs">结果：{task.resolution}</div>
@@ -213,23 +218,25 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
                         请求 DM 判断
                       </Button>
                     ) : null}
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 gap-1 text-xs"
-                      disabled={!npc?.attributes?.length || playerAttributes.length === 0}
-                      onClick={() => {
-                        setActiveForm({ taskId: task.id, mode: "dice" });
-                        setNpcAttributeByTask((current) => ({
-                          ...current,
-                          [task.id]: npc?.attributes?.[0]?.id ?? "",
-                        }));
-                      }}
-                    >
-                      <Dice5Icon className="size-3.5" />
-                      属性检定
-                    </Button>
+                    {task.direction === "player_to_npc" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 gap-1 text-xs"
+                        disabled={!npc?.attributes?.length || playerAttributes.length === 0}
+                        onClick={() => {
+                          setActiveForm({ taskId: task.id, mode: "dice" });
+                          setNpcAttributeByTask((current) => ({
+                            ...current,
+                            [task.id]: npc?.attributes?.[0]?.id ?? "",
+                          }));
+                        }}
+                      >
+                        <Dice5Icon className="size-3.5" />
+                        属性检定
+                      </Button>
+                    ) : null}
                   </div>
                 ) : null}
                 {formOpen && activeForm?.mode === "judge" ? (
@@ -305,7 +312,7 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
               </div>
             );
           })}
-          {chat.diceChecks?.slice(-3).map((check) => (
+          {topic.diceChecks?.slice(-3).map((check) => (
             <div
               key={check.id}
               className="text-muted-foreground rounded-md border px-3 py-2 text-xs"

@@ -1,56 +1,36 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  BotIcon,
-  CheckCircle2Icon,
-  CircleDashedIcon,
-  MessageCircleIcon,
-  XCircleIcon,
-} from "lucide-react";
+import { useMemo, useState } from "react";
+import { BotIcon, CheckCircle2Icon, CircleDashedIcon, XCircleIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useChatWorkspaceStore } from "@/lib/chat-store";
 import { cn } from "@/lib/utils";
-import type {
-  ChatSession,
-  NpcCreationSession,
-  NpcProgressionSession,
-  Topic,
-} from "@/lib/chat-types";
+import type { NpcCreationSession, NpcProgressionSession, Topic } from "@/lib/chat-types";
 
 type NpcRecruitmentWorkspaceProps = {
   topic: Topic;
-  chat: ChatSession;
   sessions: NpcCreationSession[];
   progressionSessions: NpcProgressionSession[];
-  groupChat: ReactNode;
 };
 
 export function NpcRecruitmentWorkspace({
   topic,
-  chat,
   sessions,
   progressionSessions,
-  groupChat,
 }: NpcRecruitmentWorkspaceProps) {
-  const [selectedId, setSelectedId] = useState<string>("group");
+  const ais = useChatWorkspaceStore((state) => state.ais);
+  const [selectedId, setSelectedId] = useState<string>("waiting");
   const selectedSession = sessions.find((session) => session.id === selectedId);
   const selectedProgressionSession = progressionSessions.find(
     (session) => `progression:${session.id}` === selectedId,
   );
-  const recruitment = chat.recruitment;
-  const canOpenGroup = chat.participants.length > 0;
-
-  useEffect(() => {
-    if (!canOpenGroup && selectedId === "group") {
-      setSelectedId(sessions[0]?.id ?? "group");
-    }
-  }, [canOpenGroup, selectedId, sessions]);
+  const recruitment = topic.recruitment;
 
   const title = useMemo(() => {
-    if (selectedId === "group") return chat.title;
+    if (selectedId === "waiting") return topic.title;
     if (selectedProgressionSession) return "DM 派发任务";
     return selectedSession ? `候选玩家 ${selectedSession.index + 1}` : "候选玩家";
-  }, [chat.title, selectedId, selectedProgressionSession, selectedSession]);
+  }, [topic.title, selectedId, selectedProgressionSession, selectedSession]);
 
   return (
     <div className="flex h-full min-h-0">
@@ -59,24 +39,23 @@ export function NpcRecruitmentWorkspace({
           <div className="truncate text-sm font-semibold">正在寻找其他玩家</div>
           <div className="text-muted-foreground mt-0.5 text-xs">
             {recruitment
-              ? `${recruitment.completedCount}/${recruitment.targetCount} 已入群`
+              ? `${recruitment.completedCount}/${recruitment.targetCount} 已加入主题`
               : "等待中"}
           </div>
         </div>
         <div className="grid gap-1 p-2">
           <Button
             type="button"
-            variant={selectedId === "group" ? "secondary" : "ghost"}
+            variant={selectedId === "waiting" ? "secondary" : "ghost"}
             className="h-auto justify-start gap-2 rounded-md px-2 py-2"
-            onClick={() => setSelectedId("group")}
-            disabled={!canOpenGroup}
+            onClick={() => setSelectedId("waiting")}
           >
-            <MessageCircleIcon className="size-4" />
-            <span className="min-w-0 flex-1 truncate text-left">群聊</span>
-            <span className="text-muted-foreground text-xs">{chat.participants.length}</span>
+            <CircleDashedIcon className="size-4" />
+            <span className="min-w-0 flex-1 truncate text-left">创建进度</span>
+            <span className="text-muted-foreground text-xs">{topic.aiIds.length}</span>
           </Button>
           {sessions.map((session) => {
-            const participant = chat.participants.find((ai) => ai.id === session.resultAiId);
+            const participant = session.resultAiId ? ais[session.resultAiId] : undefined;
             return (
               <div key={session.id} className="grid gap-1">
                 <Button
@@ -93,7 +72,7 @@ export function NpcRecruitmentWorkspace({
                   </span>
                   <span className="text-muted-foreground text-xs">
                     {session.status === "completed"
-                      ? "已入群"
+                      ? "已加入"
                       : session.status === "failed"
                         ? "失败"
                         : session.status === "running"
@@ -153,9 +132,7 @@ export function NpcRecruitmentWorkspace({
             value={selectedId}
             onChange={(event) => setSelectedId(event.target.value)}
           >
-            <option value="group" disabled={!canOpenGroup}>
-              群聊
-            </option>
+            <option value="waiting">创建进度</option>
             {sessions.map((session) => (
               <option key={session.id} value={session.id}>
                 候选玩家 {session.index + 1}
@@ -175,18 +152,14 @@ export function NpcRecruitmentWorkspace({
           </div>
         </div>
         <div className="min-h-0 flex-1">
-          {selectedId === "group" ? (
-            canOpenGroup ? (
-              groupChat
-            ) : (
-              <WaitingRoom chat={chat} />
-            )
+          {selectedId === "waiting" ? (
+            <WaitingRoom topic={topic} />
           ) : selectedSession ? (
             <NpcCreationChat session={selectedSession} />
           ) : selectedProgressionSession ? (
             <NpcProgressionChat session={selectedProgressionSession} />
           ) : (
-            <WaitingRoom chat={chat} />
+            <WaitingRoom topic={topic} />
           )}
         </div>
       </section>
@@ -194,14 +167,14 @@ export function NpcRecruitmentWorkspace({
   );
 }
 
-function WaitingRoom({ chat }: { chat: ChatSession }) {
-  const events = chat.recruitment?.events ?? [];
+function WaitingRoom({ topic }: { topic: Topic }) {
+  const events = topic.recruitment?.events ?? [];
   return (
     <div className="mx-auto flex h-full w-full max-w-3xl flex-col justify-center gap-4 px-4">
       <div className="text-center">
-        <div className="text-lg font-semibold">群聊已创建，正在寻找其他玩家</div>
+        <div className="text-lg font-semibold">主题已创建，正在寻找其他玩家</div>
         <div className="text-muted-foreground mt-1 text-sm">
-          NPC 完成创建后会自动入群。你可以先查看每个候选玩家的创建 chat。
+          NPC 完成创建后会自动加入主题。你可以切换查看每个候选玩家的创建 chat。
         </div>
       </div>
       <div className="border-border bg-muted/30 mx-auto grid max-h-72 w-full max-w-xl gap-3 overflow-y-auto rounded-lg border p-4">
