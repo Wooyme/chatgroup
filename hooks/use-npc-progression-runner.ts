@@ -7,8 +7,12 @@ import type {
   NpcProgressionSession,
   RelationshipTask,
   RelationshipTaskDirection,
+  TaskKeyNode,
+  TaskToolInputProperty,
+  TaskToolInputSchema,
   Topic,
 } from "@/lib/chat-types";
+import { createFallbackKeyNode, makeTaskToolName } from "@/lib/task-key-node";
 
 type TaskDraft = {
   npcId: string;
@@ -19,6 +23,7 @@ type TaskDraft = {
   lore: string;
   visibleHint: string;
   suggestedApproach: string;
+  rawKeyNode?: Record<string, unknown>;
 };
 
 const ACTIVE_STATUSES = new Set(["queued", "running"]);
@@ -133,6 +138,8 @@ function buildDmSystemPrompt(topic: Topic) {
   return [
     "你是中文语C群的主持人/DM，负责给玩家和 NPC 设计双向关系任务。",
     "每个任务的核心都必须是：一方需要另一方同意某事。",
+    "每个任务都必须有一个可在对话中表现出来的关键节点，例如签署文件、交付物品、公开声明、授权命令、立下誓约、接受邀请等。",
+    "关键节点必须能被一个工具调用展示给玩家或提交给 DM，不允许只是抽象地“让对方同意”。",
     "任务要适合语C互动，不要写成抽象目标，也不要要求替玩家发言。",
     "任务方向只有两种：npc_to_player 表示 NPC 需要玩家同意；player_to_npc 表示玩家需要 NPC 同意。",
     "不要说自己是 AI。",
@@ -179,8 +186,9 @@ function buildAssignmentPrompt(
       ? "请派发第一轮任务，必须覆盖每个 NPC。每个 NPC 至少一条任务，方向可以 npc_to_player 或 player_to_npc，但整体要有双向关系。"
       : "请只给指定 NPC 补发一条新任务，不要重复当前未完成任务。",
     "每个任务必须附带一段能帮助带入的世界观/lore。npc_to_player 的 visibleHint 必须隐晦，不能暴露 NPC 的真实诉求；player_to_npc 可以直接说明玩家目标。",
+    "每个任务必须生成 keyNode。keyNode.toolName 是英文小写工具动作名；inputSchema 是 JSON Schema object；uiSchema 描述玩家在 chat 内看到的卡片。你可以自由发明工具名和字段，但字段必须是字符串、数字或布尔。",
     "必须返回严格 JSON，不要 Markdown，不要解释。",
-    '返回格式：{"tasks":[{"npcId":"必须使用 NPC id","npcName":"NPC 名称","direction":"npc_to_player 或 player_to_npc","request":"需要对方同意的具体事项","stake":"为什么这件事重要/失败代价","lore":"与任务相关的一段世界观说明","visibleHint":"展示给玩家的任务提示","suggestedApproach":"建议如何在语C中推进"}]}',
+    '返回格式：{"tasks":[{"npcId":"必须使用 NPC id","npcName":"NPC 名称","direction":"npc_to_player 或 player_to_npc","request":"需要对方同意的具体事项","stake":"为什么这件事重要/失败代价","lore":"与任务相关的一段世界观说明","visibleHint":"展示给玩家的任务提示","suggestedApproach":"建议如何在语C中推进","keyNode":{"toolName":"英文动作名，例如 present_decree_to_sign","toolDescription":"什么时候调用这个工具","inputSchema":{"type":"object","properties":{"fieldName":{"type":"string","description":"字段说明"}},"required":["fieldName"]},"uiSchema":{"title":"卡片标题","body":"卡片说明","documentTitle":"文件/契约/物品标题","documentBody":"正文","fields":[{"label":"字段名","value":"字段值"}],"confirmLabel":"同意按钮","rejectLabel":"拒绝按钮","reactionPlaceholder":"玩家反应输入提示"},"successCondition":"成功条件","failureCondition":"失败条件"}}]}',
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -229,6 +237,10 @@ function normalizeTasks(
             ? `${npc.name}似乎有什么事想和你谈。`
             : `你需要让${npc.name}同意：${request}`),
         suggestedApproach: getString(item.suggestedApproach) || "通过一次直接的语C互动推进。",
+        rawKeyNode:
+          item.keyNode && typeof item.keyNode === "object" && !Array.isArray(item.keyNode)
+            ? (item.keyNode as Record<string, unknown>)
+            : undefined,
       };
     })
     .filter((task): task is TaskDraft => Boolean(task));
@@ -250,12 +262,92 @@ function normalizeTasks(
     });
   }
 
-  return drafts.map((draft) => ({
-    id: `rel_task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    ...draft,
-    status: "open",
-    createdAt: Date.now(),
-  }));
+  return drafts.map((draft) => {
+    const id = `rel_task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const { rawKeyNode: _rawKeyNode, ...taskDraft } = draft;
+    return {
+      id,
+      ...taskDraft,
+      keyNode: normalizeKeyNode(id, draft),
+      status: "open",
+      createdAt: Date.now(),
+    };
+  });
+}
+
+function normalizeKeyNode(taskId: string, draft: TaskDraft): TaskKeyNode {
+  const fallback = createFallbackKeyNode(taskId, draft);
+  const raw = draft.rawKeyNode;
+  if (!raw) return fallback;
+  const rawUi = isPlainObject(raw.uiSchema) ? raw.uiSchema : {};
+  return {
+    toolName: makeTaskToolName(taskId, getString(raw.toolName) || fallback.toolName),
+    toolDescription: getString(raw.toolDescription) || fallback.toolDescription,
+    inputSchema: normalizeInputSchema(raw.inputSchema, fallback.inputSchema),
+    uiSchema: {
+      title: getString(rawUi.title) || fallback.uiSchema.title,
+      body: getString(rawUi.body) || fallback.uiSchema.body,
+      documentTitle: getString(rawUi.documentTitle) || fallback.uiSchema.documentTitle,
+      documentBody: getString(rawUi.documentBody) || fallback.uiSchema.documentBody,
+      fields: normalizeUiFields(rawUi.fields) ?? fallback.uiSchema.fields,
+      confirmLabel: getString(rawUi.confirmLabel) || fallback.uiSchema.confirmLabel,
+      rejectLabel: getString(rawUi.rejectLabel) || fallback.uiSchema.rejectLabel,
+      reactionPlaceholder:
+        getString(rawUi.reactionPlaceholder) || fallback.uiSchema.reactionPlaceholder,
+    },
+    successCondition: getString(raw.successCondition) || fallback.successCondition,
+    failureCondition: getString(raw.failureCondition) || fallback.failureCondition,
+    actor: draft.direction,
+  };
+}
+
+function normalizeInputSchema(value: unknown, fallback: TaskToolInputSchema): TaskToolInputSchema {
+  if (!isPlainObject(value)) return fallback;
+  const rawProperties = isPlainObject(value.properties) ? value.properties : {};
+  const properties = Object.fromEntries(
+    Object.entries(rawProperties)
+      .map(([key, rawProperty]): [string, TaskToolInputProperty] | undefined => {
+        if (!isPlainObject(rawProperty)) return undefined;
+        const type = getString(rawProperty.type);
+        if (type !== "string" && type !== "number" && type !== "boolean") return undefined;
+        const rawEnum = Array.isArray(rawProperty.enum)
+          ? rawProperty.enum.filter((item): item is string => typeof item === "string")
+          : undefined;
+        return [
+          key,
+          {
+            type,
+            description: getString(rawProperty.description) || undefined,
+            ...(rawEnum?.length && { enum: rawEnum }),
+          },
+        ];
+      })
+      .filter((item): item is [string, TaskToolInputProperty] => Boolean(item)),
+  );
+  if (Object.keys(properties).length === 0) return fallback;
+  const required = Array.isArray(value.required)
+    ? value.required.filter((item): item is string => typeof item === "string" && item in properties)
+    : undefined;
+  return {
+    type: "object",
+    properties,
+    ...(required?.length && { required }),
+    additionalProperties: false,
+  };
+}
+
+function normalizeUiFields(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const fields = value
+    .map((item) => {
+      if (!isPlainObject(item)) return undefined;
+      const label = getString(item.label);
+      const fieldValue = getString(item.value);
+      if (!label || !fieldValue) return undefined;
+      return { label, value: fieldValue };
+    })
+    .filter((item): item is { label: string; value: string } => Boolean(item));
+  return fields.length > 0 ? fields : undefined;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -273,4 +365,8 @@ function parseJsonObject(text: string): Record<string, unknown> {
 
 function getString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

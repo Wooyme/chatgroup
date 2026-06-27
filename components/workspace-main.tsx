@@ -131,6 +131,7 @@ function TopicChatRuntime({
               description: topic.description,
               roleplay: topic.roleplay,
               relationshipTasks: topic.relationshipTasks,
+              taskKeyNodeRequests: topic.taskKeyNodeRequests,
               consentRequests: topic.consentRequests,
               diceChecks: topic.diceChecks,
             },

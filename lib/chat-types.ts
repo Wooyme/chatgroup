@@ -132,6 +132,45 @@ export type RelationshipTaskDirection = "npc_to_player" | "player_to_npc";
 
 export type RelationshipTaskStatus = "open" | "completed" | "failed";
 
+export type TaskToolInputProperty = {
+  type: "string" | "number" | "boolean";
+  description?: string;
+  enum?: string[];
+};
+
+export type TaskToolInputSchema = {
+  type: "object";
+  properties: Record<string, TaskToolInputProperty>;
+  required?: string[];
+  additionalProperties?: boolean;
+};
+
+export type TaskKeyNodeUiField = {
+  label: string;
+  value: string;
+};
+
+export type TaskKeyNodeUiSchema = {
+  title: string;
+  body: string;
+  documentTitle?: string;
+  documentBody?: string;
+  fields?: TaskKeyNodeUiField[];
+  confirmLabel: string;
+  rejectLabel: string;
+  reactionPlaceholder: string;
+};
+
+export type TaskKeyNode = {
+  toolName: string;
+  toolDescription: string;
+  inputSchema: TaskToolInputSchema;
+  uiSchema: TaskKeyNodeUiSchema;
+  successCondition: string;
+  failureCondition: string;
+  actor: RelationshipTaskDirection;
+};
+
 export type RelationshipTask = {
   id: string;
   npcId: string;
@@ -142,8 +181,26 @@ export type RelationshipTask = {
   lore: string;
   visibleHint: string;
   suggestedApproach: string;
+  keyNode?: TaskKeyNode;
   status: RelationshipTaskStatus;
   resolution?: string;
+  createdAt: number;
+  resolvedAt?: number;
+};
+
+export type TaskKeyNodeRequest = {
+  id: string;
+  topicId: string;
+  chatId: string;
+  taskId: string;
+  npcId: string;
+  npcName: string;
+  toolName: string;
+  payload: Record<string, unknown>;
+  title: string;
+  body: string;
+  status: "pending" | "approved" | "rejected";
+  playerReaction?: string;
   createdAt: number;
   resolvedAt?: number;
 };
@@ -234,6 +291,7 @@ export type Topic = {
   chatIds: string[];
   recruitment?: ChatRecruitment;
   relationshipTasks?: RelationshipTask[];
+  taskKeyNodeRequests?: TaskKeyNodeRequest[];
   consentRequests?: ConsentRequest[];
   diceChecks?: DiceCheck[];
   taskAssignmentSessionIds?: string[];
@@ -336,6 +394,7 @@ export type TopicContext = {
     | "description"
     | "roleplay"
     | "relationshipTasks"
+    | "taskKeyNodeRequests"
     | "consentRequests"
     | "diceChecks"
   >;

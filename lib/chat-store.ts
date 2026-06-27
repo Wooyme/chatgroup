@@ -28,6 +28,7 @@ import {
   type SceneSetup,
   type RoleplayTopicProfile,
   type StoredMessageRow,
+  type TaskKeyNodeRequest,
   type Topic,
 } from "@/lib/chat-types";
 import { createCharacterAttributes } from "@/lib/attribute-templates";
@@ -110,6 +111,19 @@ type WorkspaceState = {
     >,
   ) => ConsentRequest | undefined;
   resolveConsentRequest: (
+    chatId: string,
+    requestId: string,
+    approved: boolean,
+    playerReaction: string,
+  ) => void;
+  createTaskKeyNodeRequest: (
+    chatId: string,
+    input: Pick<
+      TaskKeyNodeRequest,
+      "taskId" | "npcId" | "npcName" | "toolName" | "payload" | "title" | "body"
+    >,
+  ) => TaskKeyNodeRequest | undefined;
+  resolveTaskKeyNodeRequest: (
     chatId: string,
     requestId: string,
     approved: boolean,
@@ -517,6 +531,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
               aiIds: [],
               chatIds: [],
               relationshipTasks: [],
+              taskKeyNodeRequests: [],
               consentRequests: [],
               diceChecks: [],
               taskAssignmentSessionIds: [],
@@ -1246,6 +1261,92 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           );
         }
       },
+      createTaskKeyNodeRequest: (chatId, input) => {
+        const topicId = get().chats[chatId]?.topicId;
+        if (!topicId) return undefined;
+        const request: TaskKeyNodeRequest = {
+          id: makeId("task_node"),
+          topicId,
+          chatId,
+          taskId: input.taskId,
+          npcId: input.npcId,
+          npcName: input.npcName,
+          toolName: input.toolName,
+          payload: input.payload,
+          title: input.title,
+          body: input.body,
+          status: "pending",
+          createdAt: now(),
+        };
+        set((state) => {
+          const topic = state.topics[topicId];
+          if (!topic) return state;
+          return {
+            topics: {
+              ...state.topics,
+              [topicId]: {
+                ...topic,
+                taskKeyNodeRequests: [...(topic.taskKeyNodeRequests ?? []), request],
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+        return request;
+      },
+      resolveTaskKeyNodeRequest: (chatId, requestId, approved, playerReaction) => {
+        const topicId = get().chats[chatId]?.topicId;
+        if (!topicId) return;
+        set((state) => {
+          const topic = state.topics[topicId];
+          if (!topic) return state;
+          const request = (topic.taskKeyNodeRequests ?? []).find((item) => item.id === requestId);
+          if (!request || request.status !== "pending") return state;
+          const taskStatus: RelationshipTaskStatus = approved ? "completed" : "failed";
+          return {
+            topics: {
+              ...state.topics,
+              [topicId]: {
+                ...topic,
+                taskKeyNodeRequests: (topic.taskKeyNodeRequests ?? []).map((item) =>
+                  item.id === requestId
+                    ? {
+                        ...item,
+                        status: approved ? "approved" : "rejected",
+                        playerReaction,
+                        resolvedAt: now(),
+                      }
+                    : item,
+                ),
+                relationshipTasks: (topic.relationshipTasks ?? []).map((task) =>
+                  task.id === request.taskId
+                    ? {
+                        ...task,
+                        status: taskStatus,
+                        resolution: approved
+                          ? `关键节点达成：${playerReaction}`
+                          : `关键节点失败：${playerReaction}`,
+                        resolvedAt: now(),
+                      }
+                    : task,
+                ),
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+        const request = get().topics[topicId]?.taskKeyNodeRequests?.find(
+          (item) => item.id === requestId,
+        );
+        if (request) {
+          get().ensureTaskAssignmentSession(
+            topicId,
+            "replacement_task",
+            request.npcId,
+            approved ? "上一条关键节点任务已达成。" : "上一条关键节点任务被玩家拒绝。",
+          );
+        }
+      },
       resolveRelationshipTask: (chatId, taskId, status, resolution) => {
         const topicId = get().chats[chatId]?.topicId ?? chatId;
         set((state) => {
@@ -1660,6 +1761,9 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
                 ...state.topics,
                 [topic.id]: {
                   ...topic,
+                  taskKeyNodeRequests: (topic.taskKeyNodeRequests ?? []).filter(
+                    (request) => request.chatId !== chatId || request.status !== "pending",
+                  ),
                   consentRequests: (topic.consentRequests ?? []).filter(
                     (request) => request.chatId !== chatId || request.status !== "pending",
                   ),
