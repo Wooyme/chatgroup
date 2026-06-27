@@ -7,10 +7,12 @@ import {
   useAui,
   useAuiEvent,
   useAuiState,
+  useThreadRuntime,
 } from "@assistant-ui/react";
 import type {
   GenericThreadHistoryAdapter,
   MessageFormatAdapter,
+  MessageFormatRepository,
   MessageStorageEntry,
   ThreadHistoryAdapter,
 } from "@assistant-ui/core";
@@ -24,6 +26,85 @@ import { useChatWorkspaceStore } from "@/lib/chat-store";
 import type { StoredMessageRow, TopicContext } from "@/lib/chat-types";
 
 type StorageContent = Record<string, unknown>;
+type UiMessageRepository = MessageFormatRepository<UIMessage>;
+
+const AI_SDK_STORAGE_FORMAT = "ai-sdk/v6";
+const EMPTY_STORED_MESSAGES: StoredMessageRow[] = [];
+
+const isUiMessage = (value: unknown): value is UIMessage =>
+  isRecord(value) && typeof value.id === "string" && typeof value.role === "string";
+
+const toStoredMessageRow = (
+  message: UIMessage,
+  parentId: string | null,
+  index: number,
+): StoredMessageRow => {
+  const { id, ...content } = message;
+  return {
+    id,
+    parent_id: parentId,
+    format: AI_SDK_STORAGE_FORMAT,
+    content: content as StorageContent,
+    createdAt: Date.now() + index,
+  };
+};
+
+const restoreInitialMessages = (rows: StoredMessageRow[]): UIMessage[] =>
+  rows.flatMap((row) => {
+    if (row.format !== AI_SDK_STORAGE_FORMAT || !isRecord(row.content)) return [];
+    return [{ id: row.id, ...row.content } as UIMessage];
+  });
+
+const rowsFromRuntimeExternalState = (externalState: unknown): StoredMessageRow[] => {
+  if (Array.isArray(externalState)) {
+    return externalState.flatMap((message, index) => {
+      if (!isUiMessage(message)) return [];
+      const previous = externalState[index - 1];
+      return [toStoredMessageRow(message, isUiMessage(previous) ? previous.id : null, index)];
+    });
+  }
+
+  if (!isRecord(externalState) || !Array.isArray(externalState.messages)) return [];
+  const repository = externalState as Partial<UiMessageRepository>;
+  return (repository.messages ?? []).flatMap((item, index) => {
+    if (!isUiMessage(item.message)) return [];
+    return [toStoredMessageRow(item.message, item.parentId ?? null, index)];
+  });
+};
+
+const rowsSnapshot = (rows: StoredMessageRow[]) =>
+  JSON.stringify(
+    rows.map((row) => ({
+      id: row.id,
+      parent_id: row.parent_id,
+      format: row.format,
+      content: row.content,
+    })),
+  );
+
+const hasWorkspaceStoreHydrated = () => {
+  const persistApi = useChatWorkspaceStore.persist;
+  return typeof persistApi?.hasHydrated === "function" ? persistApi.hasHydrated() : true;
+};
+
+function usePersistHydrated() {
+  const [hydrated, setHydrated] = useState(hasWorkspaceStoreHydrated);
+
+  useEffect(() => {
+    const persistApi = useChatWorkspaceStore.persist;
+    if (typeof persistApi?.hasHydrated !== "function") {
+      setHydrated(true);
+      return undefined;
+    }
+    if (persistApi.hasHydrated()) {
+      setHydrated(true);
+      return undefined;
+    }
+    return persistApi.onFinishHydration(() => setHydrated(true));
+  }, []);
+
+  return hydrated;
+}
 
 const makeHistoryAdapter = (chatId: string): ThreadHistoryAdapter => ({
   async load() {
@@ -83,6 +164,24 @@ const makeHistoryAdapter = (chatId: string): ThreadHistoryAdapter => ({
 });
 
 export function ChatRuntime({ topicContext }: { topicContext: TopicContext }) {
+  const hydrated = usePersistHydrated();
+
+  if (!hydrated) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center text-sm text-neutral-500">
+        正在恢复对话...
+      </div>
+    );
+  }
+
+  return <HydratedChatRuntime topicContext={topicContext} />;
+}
+
+function HydratedChatRuntime({ topicContext }: { topicContext: TopicContext }) {
+  const storedRows = useChatWorkspaceStore(
+    (state) => state.messages[topicContext.chat.id] ?? EMPTY_STORED_MESSAGES,
+  );
+  const initialMessages = useMemo(() => restoreInitialMessages(storedRows), [storedRows]);
   const historyAdapter = useMemo(
     () => makeHistoryAdapter(topicContext.chat.id),
     [topicContext.chat.id],
@@ -107,6 +206,7 @@ export function ChatRuntime({ topicContext }: { topicContext: TopicContext }) {
   );
   const runtime = useChatRuntime({
     id: topicContext.chat.id,
+    messages: initialMessages,
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     transport,
     adapters: { history: historyAdapter },
@@ -118,6 +218,10 @@ export function ChatRuntime({ topicContext }: { topicContext: TopicContext }) {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <RuntimeMessageStoreSync
+        chatId={topicContext.chat.id}
+        initialRowCount={storedRows.length}
+      />
       <FactionScoreRuntime topicContext={topicContext} />
       <RelationshipTools topicContext={topicContext} />
       <ChatRoundLockRuntime topicContext={topicContext} />
@@ -129,6 +233,40 @@ export function ChatRuntime({ topicContext }: { topicContext: TopicContext }) {
       </SceneSetupGate>
     </AssistantRuntimeProvider>
   );
+}
+
+function RuntimeMessageStoreSync({
+  chatId,
+  initialRowCount,
+}: {
+  chatId: string;
+  initialRowCount: number;
+}) {
+  const threadRuntime = useThreadRuntime();
+  const setChatMessages = useChatWorkspaceStore((state) => state.setChatMessages);
+  const lastSnapshotRef = useRef("");
+  const skipFirstEmptyRef = useRef(initialRowCount > 0);
+
+  useEffect(() => {
+    const syncMessages = () => {
+      const rows = rowsFromRuntimeExternalState(threadRuntime.exportExternalState());
+      if (rows.length === 0 && skipFirstEmptyRef.current) {
+        skipFirstEmptyRef.current = false;
+        return;
+      }
+      skipFirstEmptyRef.current = false;
+
+      const nextSnapshot = rowsSnapshot(rows);
+      if (nextSnapshot === lastSnapshotRef.current) return;
+      lastSnapshotRef.current = nextSnapshot;
+      setChatMessages(chatId, rows);
+    };
+
+    syncMessages();
+    return threadRuntime.subscribe(syncMessages);
+  }, [chatId, setChatMessages, threadRuntime]);
+
+  return null;
 }
 
 function FactionScoreRuntime({ topicContext }: { topicContext: TopicContext }) {
@@ -158,6 +296,9 @@ function ChatRoundLockRuntime({ topicContext }: { topicContext: TopicContext }) 
   const failDialogueSummary = useChatWorkspaceStore((state) => state.failDialogueSummary);
   const hasDialogueSummary = useChatWorkspaceStore((state) =>
     Object.values(state.dialogueSummaries).some((summary) => summary.chatId === chatId),
+  );
+  const hasVisibleStoredMessages = useChatWorkspaceStore((state) =>
+    (state.messages[chatId] ?? []).some(isVisibleStoredMessageRow),
   );
   const openTasks = (topicContext.topic.relationshipTasks ?? []).filter(
     (task) => participant && task.npcId === participant.id && task.status === "open",
@@ -252,7 +393,7 @@ function ChatRoundLockRuntime({ topicContext }: { topicContext: TopicContext }) 
       !topicContext.topic.roleplay ||
       !participant ||
       setup?.status !== "final" ||
-      hasDialogueSummary
+      (hasDialogueSummary && hasVisibleStoredMessages)
     ) {
       return;
     }
@@ -262,6 +403,7 @@ function ChatRoundLockRuntime({ topicContext }: { topicContext: TopicContext }) 
   }, [
     chatId,
     hasDialogueSummary,
+    hasVisibleStoredMessages,
     lock,
     participant,
     setup?.status,
@@ -726,10 +868,16 @@ function SceneSetupGate({
 function NpcFirstMessageStarter({ topicContext }: { topicContext: TopicContext }) {
   const api = useAui();
   const started = useRef(false);
+  const hasVisibleStoredMessages = useChatWorkspaceStore((state) =>
+    (state.messages[topicContext.chat.id] ?? []).some(isVisibleStoredMessageRow),
+  );
   const setup = useChatWorkspaceStore(
     (state) => state.chats[topicContext.chat.id]?.sceneSetup ?? topicContext.chat.sceneSetup,
   );
   const setSceneSetup = useChatWorkspaceStore((state) => state.setSceneSetup);
+  const resetEmptyChatRuntimeState = useChatWorkspaceStore(
+    (state) => state.resetEmptyChatRuntimeState,
+  );
   const participant = topicContext.chat.participants[0];
   const task = setup?.taskId
     ? topicContext.topic.relationshipTasks?.find((item) => item.id === setup.taskId)
@@ -739,14 +887,15 @@ function NpcFirstMessageStarter({ topicContext }: { topicContext: TopicContext }
     if (
       !setup ||
       setup.status !== "final" ||
-      setup.npcStarted ||
+      hasVisibleStoredMessages ||
       started.current ||
-      task?.direction !== "npc_to_player" ||
+      task?.direction === "player_to_npc" ||
       !participant
     ) {
       return;
     }
     started.current = true;
+    resetEmptyChatRuntimeState(topicContext.chat.id);
     api.thread().append({
       role: "user",
       content: [
@@ -756,11 +905,15 @@ function NpcFirstMessageStarter({ topicContext }: { topicContext: TopicContext }
             "【系统隐藏消息：NPC开场触发】",
             `DM 场景：${setup.finalScene || setup.dmScene || ""}`,
             `请作为 ${participant.name} 先开口，像正常语C私聊一样自然发起互动。`,
-            `你的隐藏任务诉求：让玩家同意「${task.request}」`,
-            `利害：${task.stake}`,
-            `推进建议：${task.suggestedApproach}`,
-            "第一句可以铺垫，不必立刻摊牌，但要让玩家感觉你确实有事相求。不要替玩家发言。",
-          ].join("\n"),
+            task ? `你的隐藏任务诉求：让玩家同意「${task.request}」` : undefined,
+            task ? `利害：${task.stake}` : undefined,
+            task ? `推进建议：${task.suggestedApproach}` : undefined,
+            task
+              ? "第一句可以铺垫，不必立刻摊牌，但要让玩家感觉你确实有事相求。不要替玩家发言。"
+              : "请自然开启对话，说明你进入当前场景的动作或一句开场白。不要替玩家发言。",
+          ]
+            .filter(Boolean)
+            .join("\n"),
         },
       ],
       metadata: {
@@ -771,7 +924,16 @@ function NpcFirstMessageStarter({ topicContext }: { topicContext: TopicContext }
       },
     });
     setSceneSetup(topicContext.chat.id, { ...setup, npcStarted: true });
-  }, [api, participant, setSceneSetup, setup, task, topicContext.chat.id]);
+  }, [
+    api,
+    hasVisibleStoredMessages,
+    participant,
+    resetEmptyChatRuntimeState,
+    setSceneSetup,
+    setup,
+    task,
+    topicContext.chat.id,
+  ]);
 
   return null;
 }
@@ -782,6 +944,24 @@ function getToolString(value: unknown) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isVisibleStoredMessageRow(row: StoredMessageRow) {
+  return !hasHiddenStoredMessageMetadata(row.content);
+}
+
+function hasHiddenStoredMessageMetadata(value: unknown, depth = 0): boolean {
+  if (depth > 10 || !value || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => hasHiddenStoredMessageMetadata(item, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  const metadata = record.metadata;
+  if (isRecord(metadata)) {
+    const custom = metadata.custom;
+    if (isRecord(custom) && custom.hidden === true) return true;
+  }
+  return Object.values(record).some((item) => hasHiddenStoredMessageMetadata(item, depth + 1));
 }
 
 function rollOpposedCheck(playerValue: number, npcValue: number) {

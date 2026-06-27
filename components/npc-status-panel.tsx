@@ -15,11 +15,16 @@ import { useChatWorkspaceStore } from "@/lib/chat-store";
 import type {
   AiParticipant,
   CharacterAttribute,
+  ChatLeaveRequest,
   ChatSession,
   RelationshipTask,
+  StoredMessageRow,
   Topic,
 } from "@/lib/chat-types";
 import { cn } from "@/lib/utils";
+
+const EMPTY_MESSAGES: StoredMessageRow[] = [];
+const EMPTY_LEAVE_REQUESTS: ChatLeaveRequest[] = [];
 
 type WorkspaceModalApi = {
   confirm: (options: {
@@ -49,8 +54,10 @@ export function NpcStatusPanel({
   const resolveRelationshipTask = useChatWorkspaceStore((state) => state.resolveRelationshipTask);
   const addDiceCheck = useChatWorkspaceStore((state) => state.addDiceCheck);
   const chatLock = useChatWorkspaceStore((state) => state.chatLocks[chat.id]);
-  const chatMessages = useChatWorkspaceStore((state) => state.messages[chat.id] ?? []);
-  const leaveRequests = useChatWorkspaceStore((state) => state.chatLeaveRequests[chat.id] ?? []);
+  const chatMessages = useChatWorkspaceStore((state) => state.messages[chat.id] ?? EMPTY_MESSAGES);
+  const leaveRequests = useChatWorkspaceStore(
+    (state) => state.chatLeaveRequests[chat.id] ?? EMPTY_LEAVE_REQUESTS,
+  );
   const requestNaturalExit = useChatWorkspaceStore((state) => state.requestNaturalExit);
   const requestForcedExit = useChatWorkspaceStore((state) => state.requestForcedExit);
   const setChatLockStatus = useChatWorkspaceStore((state) => state.setChatLockStatus);

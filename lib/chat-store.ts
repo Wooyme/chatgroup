@@ -175,6 +175,7 @@ type WorkspaceState = {
   setChatMessages: (chatId: string, rows: StoredMessageRow[]) => void;
   upsertChatMessage: (chatId: string, row: StoredMessageRow) => void;
   deleteChatMessages: (chatId: string, ids: string[]) => void;
+  resetEmptyChatRuntimeState: (chatId: string) => void;
 };
 
 type AiParticipantInput = Partial<
@@ -214,6 +215,24 @@ const ROLE_NICHES = [
   { name: "反叛", keywords: ["叛军", "革命", "地下", "异见"] },
   { name: "宫廷", keywords: ["贵族", "侍从", "顾问", "内廷"] },
 ];
+
+const hasHiddenMessageMetadata = (value: unknown, depth = 0): boolean => {
+  if (depth > 10 || !value || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => hasHiddenMessageMetadata(item, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  const metadata = record.metadata;
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const custom = (metadata as Record<string, unknown>).custom;
+    if (custom && typeof custom === "object" && !Array.isArray(custom)) {
+      if ((custom as Record<string, unknown>).hidden === true) return true;
+    }
+  }
+  return Object.values(record).some((item) => hasHiddenMessageMetadata(item, depth + 1));
+};
+
+const isHiddenStoredMessage = (row: StoredMessageRow) => hasHiddenMessageMetadata(row.content);
 
 const makeId = (prefix: string) =>
   `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1577,9 +1596,18 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         set({ activeTopicId: chat.topicId, activeChatId: chatId });
       },
       setChatMessages: (chatId, rows) => {
-        set((state) => ({
-          messages: { ...state.messages, [chatId]: rows },
-        }));
+        set((state) => {
+          const chat = state.chats[chatId];
+          return {
+            messages: { ...state.messages, [chatId]: rows },
+            ...(chat && {
+              chats: {
+                ...state.chats,
+                [chatId]: { ...chat, updatedAt: now() },
+              },
+            }),
+          };
+        });
       },
       upsertChatMessage: (chatId, row) => {
         set((state) => {
@@ -1609,6 +1637,51 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             [chatId]: (state.messages[chatId] ?? []).filter((row) => !idSet.has(row.id)),
           },
         }));
+      },
+      resetEmptyChatRuntimeState: (chatId) => {
+        set((state) => {
+          const chat = state.chats[chatId];
+          if (!chat) return state;
+          const messages = {
+            ...state.messages,
+            [chatId]: (state.messages[chatId] ?? []).filter((row) => !isHiddenStoredMessage(row)),
+          };
+          const chatLocks = { ...state.chatLocks };
+          const chatLeaveRequests = { ...state.chatLeaveRequests };
+          const topic = state.topics[chat.topicId];
+          delete chatLocks[chatId];
+          delete chatLeaveRequests[chatId];
+          return {
+            messages,
+            chatLocks,
+            chatLeaveRequests,
+            ...(topic && {
+              topics: {
+                ...state.topics,
+                [topic.id]: {
+                  ...topic,
+                  consentRequests: (topic.consentRequests ?? []).filter(
+                    (request) => request.chatId !== chatId || request.status !== "pending",
+                  ),
+                  diceChecks: (topic.diceChecks ?? []).filter((check) => check.chatId !== chatId),
+                  updatedAt: now(),
+                },
+              },
+            }),
+            chats: {
+              ...state.chats,
+              [chatId]: {
+                ...chat,
+                factionScoreEvents: [],
+                toolCallCounts: {},
+                sceneSetup: chat.sceneSetup
+                  ? { ...chat.sceneSetup, npcStarted: false }
+                  : chat.sceneSetup,
+                updatedAt: now(),
+              },
+            },
+          };
+        });
       },
     }),
     {
