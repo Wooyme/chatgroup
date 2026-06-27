@@ -254,6 +254,72 @@ export type ChatSession = {
   updatedAt: number;
 };
 
+export type ChatLockStatus =
+  | "active"
+  | "player_leave_reviewing"
+  | "npc_leave_pending"
+  | "natural_exit_requested"
+  | "forced_exit_requested"
+  | "closing"
+  | "finalizing";
+
+export type ChatLock = {
+  chatId: string;
+  npcId: string;
+  status: ChatLockStatus;
+  exitInitiator?: "player" | "npc";
+  exitReason?: string;
+  exitClosing?: string;
+  startedAt: number;
+  updatedAt: number;
+};
+
+export type ChatLeaveRequest = {
+  id: string;
+  topicId: string;
+  chatId: string;
+  npcId: string;
+  npcName: string;
+  initiator: "player" | "npc";
+  status: "pending_player" | "approved" | "rejected" | "forced" | "completed";
+  reason: string;
+  dmReview?: string;
+  playerReaction?: string;
+  forced?: boolean;
+  createdAt: number;
+  resolvedAt?: number;
+};
+
+export type DialogueTranscript = {
+  id: string;
+  topicId: string;
+  chatId: string;
+  npcId: string;
+  npcName: string;
+  trigger: "natural_exit" | "forced_exit";
+  messageIds: string[];
+  transcript: string;
+  createdAt: number;
+};
+
+export type DialogueSummary = {
+  id: string;
+  transcriptId: string;
+  topicId: string;
+  chatId: string;
+  npcId: string;
+  npcName: string;
+  trigger: "natural_exit" | "forced_exit";
+  status: "completed" | "failed";
+  dmSummary?: string;
+  npcPrivateSummary?: string;
+  playerImpression?: string;
+  importantPoints?: string[];
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type StoredMessageRow<TContent extends Record<string, unknown> = Record<string, unknown>> = {
   id: string;
   parent_id: string | null;
@@ -277,6 +343,7 @@ export type TopicContext = {
     ChatSession,
     "id" | "title" | "mode" | "participants" | "toolCallCounts" | "sceneSetup"
   >;
+  npcMemorySummaries?: DialogueSummary[];
 };
 
 export const DEFAULT_AI_PARTICIPANTS: AiParticipant[] = [

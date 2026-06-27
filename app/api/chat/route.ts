@@ -98,6 +98,25 @@ const formatRelationshipTasks = (
     .join("\n");
 };
 
+const formatNpcMemories = (topicContext: TopicContext | undefined) => {
+  const memories = topicContext?.npcMemorySummaries ?? [];
+  if (memories.length === 0) return "";
+  return [
+    "过往你以现实扮演者身份记录的玩家印象与重要记忆：",
+    ...memories.map((summary, index) =>
+      [
+        `${index + 1}. ${summary.npcPrivateSummary ?? "未记录复盘"}`,
+        summary.playerImpression ? `玩家印象：${summary.playerImpression}` : undefined,
+        summary.importantPoints?.length
+          ? `重要点：${summary.importantPoints.join("；")}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    ),
+  ].join("\n");
+};
+
 const buildDialogSystemPrompt = (
   baseSystem: string | undefined,
   topicContext: TopicContext | undefined,
@@ -120,6 +139,7 @@ const buildDialogSystemPrompt = (
           ? `本次对话 DM 场景：${topicContext.chat.sceneSetup.finalScene}`
           : undefined,
         formatRelationshipTasks(topicContext, participant),
+        formatNpcMemories(topicContext),
         `角色提示词：${participant.systemPrompt}`,
         "回复要求：",
         "- 现实扮演者人设只影响你的表达习惯、偏好和参与方式；默认不要主动暴露现实人设。",
@@ -128,6 +148,8 @@ const buildDialogSystemPrompt = (
         "- 可以主动推进互动，但不要替玩家做决定或代替玩家发言。",
         "- 如果当前任务方向是 npc_to_player，你需要在自然互动后调用 request_player_consent，请玩家同意任务诉求；本次单聊最多 3 次。",
         "- 如果你要请求 DM 介入属性对抗，可以调用 request_dm_check。胜出会直接完成任务，失败会导致任务失败并产生惩罚。",
+        "- 如果你希望自然结束当前一对一对话，可以调用 request_leave，并等待玩家同意或拒绝。",
+        "- 只有当你已经调用 request_leave 且玩家拒绝后，才可以调用 force_leave；这会让 DM 接管强制离场。",
       ]
         .filter(Boolean)
         .join("\n"),

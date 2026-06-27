@@ -6,6 +6,7 @@ import {
   ChevronUpIcon,
   Dice5Icon,
   GavelIcon,
+  LogOutIcon,
   PanelsTopLeftIcon,
   XIcon,
 } from "lucide-react";
@@ -20,15 +21,40 @@ import type {
 } from "@/lib/chat-types";
 import { cn } from "@/lib/utils";
 
+type WorkspaceModalApi = {
+  confirm: (options: {
+    title: string;
+    description?: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    destructive?: boolean;
+  }) => Promise<boolean>;
+};
+
 type PanelFormState = {
   taskId: string;
   mode: "judge" | "dice";
 };
 
-export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSession }) {
+export function NpcStatusPanel({
+  topic,
+  chat,
+  modal,
+}: {
+  topic: Topic;
+  chat: ChatSession;
+  modal: WorkspaceModalApi;
+}) {
   const resolveConsentRequest = useChatWorkspaceStore((state) => state.resolveConsentRequest);
   const resolveRelationshipTask = useChatWorkspaceStore((state) => state.resolveRelationshipTask);
   const addDiceCheck = useChatWorkspaceStore((state) => state.addDiceCheck);
+  const chatLock = useChatWorkspaceStore((state) => state.chatLocks[chat.id]);
+  const chatMessages = useChatWorkspaceStore((state) => state.messages[chat.id] ?? []);
+  const leaveRequests = useChatWorkspaceStore((state) => state.chatLeaveRequests[chat.id] ?? []);
+  const requestNaturalExit = useChatWorkspaceStore((state) => state.requestNaturalExit);
+  const requestForcedExit = useChatWorkspaceStore((state) => state.requestForcedExit);
+  const setChatLockStatus = useChatWorkspaceStore((state) => state.setChatLockStatus);
+  const resolveLeaveRequest = useChatWorkspaceStore((state) => state.resolveLeaveRequest);
   const playerAttributes = topic.roleplay?.playerAttributes ?? [];
   const participant = chat.participants[0];
   const tasks = (topic.relationshipTasks ?? []).filter((task) => task.npcId === participant?.id);
@@ -41,9 +67,14 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
   const [playerAttributeId, setPlayerAttributeId] = useState(playerAttributes[0]?.id ?? "");
   const [npcAttributeByTask, setNpcAttributeByTask] = useState<Record<string, string>>({});
   const [busyTaskId, setBusyTaskId] = useState("");
+  const [leaveBusy, setLeaveBusy] = useState(false);
+  const [leaveReactions, setLeaveReactions] = useState<Record<string, string>>({});
   const [requestReactions, setRequestReactions] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState(true);
   const finalScene = chat.sceneSetup?.finalScene;
+  const pendingLeaveRequests = leaveRequests.filter(
+    (request) => request.status === "pending_player" && request.npcId === participant?.id,
+  );
 
   const npcById = useMemo(
     () => new Map(chat.participants.map((participant) => [participant.id, participant])),
@@ -116,28 +147,108 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
     }
   };
 
+  const handlePlayerLeave = async () => {
+    if (!participant || leaveBusy || !finalScene) return;
+    setLeaveBusy(true);
+    setChatLockStatus(chat.id, { status: "player_leave_reviewing", exitInitiator: "player" });
+    try {
+      const review = await requestDmLeaveReview(topic, chat, participant, chatMessages);
+      if (review.canLeave) {
+        requestNaturalExit(chat.id, {
+          exitInitiator: "player",
+          exitReason: review.reason,
+          exitClosing: review.closing,
+        });
+        return;
+      }
+      setChatLockStatus(chat.id, { status: "active" });
+      const confirmed = await modal.confirm({
+        title: "DM 不建议现在离场",
+        description: `${review.reason || "DM 认为当前双方还没有达成自然离场。"}\n\n如果仍要离场，将由 DM 接管强制离场流程，NPC 会明显不愉快。`,
+        confirmLabel: "强制离场",
+        cancelLabel: "继续对话",
+        destructive: true,
+      });
+      if (confirmed) {
+        requestForcedExit(chat.id, "player", review.reason || "玩家在 DM 不建议时仍选择离场。");
+      }
+    } catch {
+      setChatLockStatus(chat.id, { status: "active" });
+      const confirmed = await modal.confirm({
+        title: "DM 审核失败",
+        description: "无法完成自然离场审核。是否改为强制离场？",
+        confirmLabel: "强制离场",
+        cancelLabel: "继续对话",
+        destructive: true,
+      });
+      if (confirmed) requestForcedExit(chat.id, "player", "DM 审核失败后玩家选择强制离场。");
+    } finally {
+      setLeaveBusy(false);
+    }
+  };
+
+  const approveNpcLeave = (requestId: string) => {
+    const request = pendingLeaveRequests.find((item) => item.id === requestId);
+    if (!request) return;
+    const reaction = leaveReactions[requestId] || "我同意你离开。";
+    resolveLeaveRequest(chat.id, requestId, "approved", reaction);
+    requestNaturalExit(chat.id, {
+      exitInitiator: "npc",
+      exitReason: request.reason,
+      exitClosing: `DM确认玩家同意 ${request.npcName} 离场。${request.npcName} 可以在当前场景中自然退场。`,
+    });
+  };
+
+  const rejectNpcLeave = (requestId: string) => {
+    const reaction = leaveReactions[requestId] || "我不同意你现在离开。";
+    resolveLeaveRequest(chat.id, requestId, "rejected", reaction);
+    setChatLockStatus(chat.id, { status: "active" });
+  };
+
   return (
-    <div className="pointer-events-none absolute top-4 right-4 left-4 z-20 max-h-[calc(100%-2rem)]">
+    <div className="border-b bg-background">
       {expanded ? (
-        <div className="pointer-events-auto overflow-hidden rounded-md border bg-background/95 shadow-lg backdrop-blur">
+        <div className="overflow-hidden bg-background">
           <div className="flex h-10 items-center justify-between gap-2 border-b px-3">
             <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
               <PanelsTopLeftIcon className="size-4 shrink-0" />
               <span className="truncate">场景与任务</span>
               <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-xs">
-                {pendingRequests.length + tasks.filter((task) => task.status === "open").length}
+                {pendingRequests.length +
+                  pendingLeaveRequests.length +
+                  tasks.filter((task) => task.status === "open").length}
               </span>
             </div>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="size-7"
-              onClick={() => setExpanded(false)}
-              aria-label="收起场景与任务面板"
-            >
-              <ChevronUpIcon className="size-4" />
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 text-xs"
+                disabled={
+                  leaveBusy ||
+                  !finalScene ||
+                  chatLock?.status === "closing" ||
+                  chatLock?.status === "finalizing" ||
+                  chatLock?.status === "forced_exit_requested" ||
+                  chatLock?.status === "natural_exit_requested"
+                }
+                onClick={() => void handlePlayerLeave()}
+              >
+                <LogOutIcon className="size-3.5" />
+                {leaveBusy || chatLock?.status === "player_leave_reviewing" ? "DM审核中" : "离场"}
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-7"
+                onClick={() => setExpanded(false)}
+                aria-label="收起场景与任务面板"
+              >
+                <ChevronUpIcon className="size-4" />
+              </Button>
+            </div>
           </div>
           <div className="grid max-h-[min(34rem,calc(100vh-9rem))] gap-3 overflow-y-auto p-3 lg:grid-cols-[minmax(190px,0.7fr)_minmax(0,2fr)]">
             {finalScene ? (
@@ -153,6 +264,45 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
               <AttributeList attributes={playerAttributes} />
             </div>
             <div className="grid gap-2">
+              {pendingLeaveRequests.map((request) => (
+                <div
+                  key={request.id}
+                  className="border-amber-300 bg-amber-50/70 rounded-md border p-3 text-amber-950"
+                >
+                  <div className="text-sm font-semibold">{request.npcName} 想要离场</div>
+                  <div className="mt-1 text-sm">{request.reason}</div>
+                  <textarea
+                    className="border-input bg-background mt-2 min-h-16 w-full resize-y rounded-md border px-2 py-1.5 text-xs text-foreground outline-none"
+                    placeholder="写一段玩家的语C反应..."
+                    value={leaveReactions[request.id] ?? ""}
+                    onChange={(event) =>
+                      setLeaveReactions((current) => ({
+                        ...current,
+                        [request.id]: event.target.value,
+                      }))
+                    }
+                  />
+                  <div className="mt-2 flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => approveNpcLeave(request.id)}
+                    >
+                      同意离场
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => rejectNpcLeave(request.id)}
+                    >
+                      不同意
+                    </Button>
+                  </div>
+                </div>
+              ))}
               {pendingRequests.map((request) => (
                 <div
                   key={request.id}
@@ -377,7 +527,7 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
           </div>
         </div>
       ) : (
-        <div className="pointer-events-auto flex min-h-10 items-center gap-3 rounded-md border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
+        <div className="flex min-h-10 items-center gap-3 px-3 py-2 text-xs">
           <div className="min-w-0 flex-1">
             {finalScene ? (
               <div className="truncate">
@@ -389,8 +539,28 @@ export function NpcStatusPanel({ topic, chat }: { topic: Topic; chat: ChatSessio
             )}
           </div>
           <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5">
-            {pendingRequests.length + tasks.filter((task) => task.status === "open").length}
+            {pendingRequests.length +
+              pendingLeaveRequests.length +
+              tasks.filter((task) => task.status === "open").length}
           </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1 text-xs"
+            disabled={
+              leaveBusy ||
+              !finalScene ||
+              chatLock?.status === "closing" ||
+              chatLock?.status === "finalizing" ||
+              chatLock?.status === "forced_exit_requested" ||
+              chatLock?.status === "natural_exit_requested"
+            }
+            onClick={() => void handlePlayerLeave()}
+          >
+            <LogOutIcon className="size-3.5" />
+            离场
+          </Button>
           <Button
             type="button"
             size="icon"
@@ -489,6 +659,47 @@ async function requestDmJudgement(
   };
 }
 
+async function requestDmLeaveReview(
+  topic: Topic,
+  chat: ChatSession,
+  npc: AiParticipant,
+  rows: ReturnType<typeof useChatWorkspaceStore.getState>["messages"][string],
+) {
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      responseMode: "text",
+      system:
+        "你是中文语C群的 DM。玩家请求离开当前一对一场景，你要判断双方是否都适合自然离场。必须返回严格 JSON。",
+      prompt: [
+        `主题：${topic.title}`,
+        `世界观：${topic.roleplay?.worldView ?? topic.description}`,
+        `玩家角色：${topic.roleplay?.playerRole ?? "玩家"}`,
+        `NPC：${npc.name}（${npc.role}）`,
+        chat.sceneSetup?.finalScene ? `当前场景：${chat.sceneSetup.finalScene}` : undefined,
+        "当前开放任务：",
+        ...((topic.relationshipTasks ?? [])
+          .filter((task) => task.npcId === npc.id && task.status === "open")
+          .map((task) => `- ${task.direction}：${task.request}；${task.stake}`) ?? []),
+        `对话摘要材料：${formatStoredRowsForDm(rows) || "暂无可用对话。"}`,
+        "判断标准：如果双方在语境中都能接受暂时结束，或继续对话并非必要，则 canLeave=true。若一方明显还在追问、挽留、冲突升级，或离场会显得突兀，则 canLeave=false。",
+        '返回格式：{"canLeave":true或false,"reason":"简短审核理由","closing":"若自然离场，DM可见收场描述"}',
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    }),
+  });
+  if (!response.ok) throw new Error("DM 离场审核失败");
+  const payload = (await response.json()) as { text?: string };
+  const parsed = parseJsonObject(payload.text ?? "");
+  return {
+    canLeave: parsed.canLeave === true,
+    reason: getString(parsed.reason),
+    closing: getString(parsed.closing) || "DM确认双方暂时结束这次对话，场景自然收束。",
+  };
+}
+
 async function requestDmDiceResult(
   topic: Topic,
   chat: ChatSession,
@@ -554,6 +765,31 @@ function parseJsonObject(text: string): Record<string, unknown> {
   return parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? (parsed as Record<string, unknown>)
     : {};
+}
+
+function formatStoredRowsForDm(
+  rows: ReturnType<typeof useChatWorkspaceStore.getState>["messages"][string],
+) {
+  return rows
+    .slice(-12)
+    .map((row, index) => {
+      const text = extractText(row.content);
+      return text ? `${index + 1}. ${text}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function extractText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(extractText).filter(Boolean).join(" ");
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") return record.text;
+  if ("content" in record) return extractText(record.content);
+  if ("parts" in record) return extractText(record.parts);
+  if ("messages" in record) return extractText(record.messages);
+  return "";
 }
 
 function getString(value: unknown) {

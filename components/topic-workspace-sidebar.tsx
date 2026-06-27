@@ -92,11 +92,15 @@ type WorkspaceModalApi = {
 
 type TopicWorkspaceSidebarProps = React.ComponentProps<typeof Sidebar> & {
   modal: WorkspaceModalApi;
+  guardAction: (action: () => void | Promise<void>) => Promise<void>;
+  actionLocked: boolean;
   onCreateTopicAssistant: () => void;
 };
 
 export function TopicWorkspaceSidebar({
   modal,
+  guardAction,
+  actionLocked,
   onCreateTopicAssistant,
   ...props
 }: TopicWorkspaceSidebarProps) {
@@ -315,7 +319,10 @@ export function TopicWorkspaceSidebar({
       <SidebarContent className="px-1">
         <SidebarGroup>
           <SidebarGroupLabel>主题</SidebarGroupLabel>
-          <SidebarGroupAction aria-label="创建主题" onClick={onCreateTopicAssistant}>
+          <SidebarGroupAction
+            aria-label="创建主题"
+            onClick={() => void guardAction(onCreateTopicAssistant)}
+          >
             <PlusIcon />
           </SidebarGroupAction>
           <SidebarGroupContent>
@@ -324,7 +331,7 @@ export function TopicWorkspaceSidebar({
                 <SidebarMenuItem key={topic.id}>
                   <SidebarMenuButton
                     isActive={topic.id === activeTopicId}
-                    onClick={() => setActiveTopic(topic.id)}
+                    onClick={() => void guardAction(() => setActiveTopic(topic.id))}
                     tooltip={topic.title}
                   >
                     <MessageSquareIcon />
@@ -333,7 +340,7 @@ export function TopicWorkspaceSidebar({
                   <SidebarMenuAction
                     aria-label="重命名主题"
                     showOnHover
-                    onClick={() => editTopic(topic.id, topic.title)}
+                    onClick={() => void guardAction(() => editTopic(topic.id, topic.title))}
                   >
                     <PencilIcon />
                   </SidebarMenuAction>
@@ -342,7 +349,7 @@ export function TopicWorkspaceSidebar({
                       aria-label="删除主题"
                       showOnHover
                       className="right-7"
-                      onClick={() => removeTopic(topic.id, topic.title)}
+                      onClick={() => void guardAction(() => removeTopic(topic.id, topic.title))}
                     >
                       <TrashIcon />
                     </SidebarMenuAction>
@@ -355,7 +362,7 @@ export function TopicWorkspaceSidebar({
 
         <SidebarGroup>
           <SidebarGroupLabel>当前主题 AI</SidebarGroupLabel>
-          <SidebarGroupAction aria-label="创建 AI" onClick={addAi}>
+          <SidebarGroupAction aria-label="创建 AI" onClick={() => void guardAction(addAi)}>
             <PlusIcon />
           </SidebarGroupAction>
           <SidebarGroupContent>
@@ -378,7 +385,11 @@ export function TopicWorkspaceSidebar({
                       </span>
                     </span>
                   </SidebarMenuButton>
-                  <SidebarMenuAction aria-label="编辑 AI" showOnHover onClick={() => editAi(ai)}>
+                  <SidebarMenuAction
+                    aria-label="编辑 AI"
+                    showOnHover
+                    onClick={() => void guardAction(() => editAi(ai))}
+                  >
                     <PencilIcon />
                   </SidebarMenuAction>
                   {aiList.length > 1 && (
@@ -386,7 +397,7 @@ export function TopicWorkspaceSidebar({
                       aria-label="删除 AI"
                       showOnHover
                       className="right-7"
-                      onClick={() => removeAi(ai)}
+                      onClick={() => void guardAction(() => removeAi(ai))}
                     >
                       <TrashIcon />
                     </SidebarMenuAction>
@@ -406,7 +417,7 @@ export function TopicWorkspaceSidebar({
                 variant="outline"
                 size="sm"
                 className="h-8 justify-start gap-1.5 rounded-md px-2 text-xs"
-                onClick={() => addChat()}
+                onClick={() => void guardAction(addChat)}
                 disabled={!activeTopic || aiList.length === 0}
               >
                 <BotIcon className="size-3.5" />
@@ -419,7 +430,9 @@ export function TopicWorkspaceSidebar({
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       isActive={activeChatId === welcomePanelId}
-                      onClick={() => setActiveTopicPanel(activeTopic.id, "welcome")}
+                      onClick={() =>
+                        void guardAction(() => setActiveTopicPanel(activeTopic.id, "welcome"))
+                      }
                       tooltip="主题 Welcome"
                     >
                       <HomeIcon />
@@ -433,7 +446,11 @@ export function TopicWorkspaceSidebar({
                     <SidebarMenuItem>
                       <SidebarMenuButton
                         isActive={activeChatId === topicCreationPanelId}
-                        onClick={() => setActiveTopicPanel(activeTopic.id, "topic-creation")}
+                        onClick={() =>
+                          void guardAction(() =>
+                            setActiveTopicPanel(activeTopic.id, "topic-creation"),
+                          )
+                        }
                         tooltip="主题创建助手"
                       >
                         <ClipboardListIcon />
@@ -448,7 +465,9 @@ export function TopicWorkspaceSidebar({
                     <SidebarMenuItem>
                       <SidebarMenuButton
                         isActive={activeChatId === recruitmentPanelId}
-                        onClick={() => setActiveTopicPanel(activeTopic.id, "recruitment")}
+                        onClick={() =>
+                          void guardAction(() => setActiveTopicPanel(activeTopic.id, "recruitment"))
+                        }
                         tooltip="DM 招募群成员"
                       >
                         <UserRoundSearchIcon />
@@ -465,7 +484,7 @@ export function TopicWorkspaceSidebar({
                 <SidebarMenuItem key={chat.id}>
                   <SidebarMenuButton
                     isActive={chat.id === activeChatId}
-                    onClick={() => setActiveChat(chat.id)}
+                    onClick={() => void guardAction(() => setActiveChat(chat.id))}
                     tooltip={`${chat.title} · ${chat.participants.map((ai) => ai.name).join("、")}`}
                   >
                     <BotIcon />
@@ -477,7 +496,7 @@ export function TopicWorkspaceSidebar({
                   <SidebarMenuAction
                     aria-label="重命名会话"
                     showOnHover
-                    onClick={() => editChat(chat.id, chat.title)}
+                    onClick={() => void guardAction(() => editChat(chat.id, chat.title))}
                   >
                     <PencilIcon />
                   </SidebarMenuAction>
@@ -485,7 +504,7 @@ export function TopicWorkspaceSidebar({
                     aria-label="删除会话"
                     showOnHover
                     className="right-7"
-                    onClick={() => removeChat(chat.id, chat.title)}
+                    onClick={() => void guardAction(() => removeChat(chat.id, chat.title))}
                   >
                     <TrashIcon />
                   </SidebarMenuAction>
@@ -495,7 +514,14 @@ export function TopicWorkspaceSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarRail />
+      <SidebarRail
+        {...(actionLocked && {
+          onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+            event.preventDefault();
+            void guardAction(() => {});
+          },
+        })}
+      />
     </Sidebar>
   );
 }

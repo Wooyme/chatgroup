@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AssistantRuntimeProvider, useAssistantTool, useAui } from "@assistant-ui/react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  AssistantRuntimeProvider,
+  useAssistantTool,
+  useAui,
+  useAuiEvent,
+  useAuiState,
+} from "@assistant-ui/react";
 import type {
   GenericThreadHistoryAdapter,
   MessageFormatAdapter,
@@ -114,6 +120,7 @@ export function ChatRuntime({ topicContext }: { topicContext: TopicContext }) {
     <AssistantRuntimeProvider runtime={runtime}>
       <FactionScoreRuntime topicContext={topicContext} />
       <RelationshipTools topicContext={topicContext} />
+      <ChatRoundLockRuntime topicContext={topicContext} />
       <SceneSetupGate topicContext={topicContext}>
         <Thread
           welcomeTitle={`与 ${participantNames || "AI"} 开始语C`}
@@ -126,6 +133,214 @@ export function ChatRuntime({ topicContext }: { topicContext: TopicContext }) {
 
 function FactionScoreRuntime({ topicContext }: { topicContext: TopicContext }) {
   useFactionScoreRunner(topicContext);
+  return null;
+}
+
+function ChatRoundLockRuntime({ topicContext }: { topicContext: TopicContext }) {
+  const api = useAui();
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const runtimeMessages = useAuiState((state) => state.thread.messages);
+  const forcedExitStartedRef = useRef(false);
+  const naturalExitStartedRef = useRef(false);
+  const finalizingRef = useRef(false);
+  const chatId = topicContext.chat.id;
+  const participant = topicContext.chat.participants[0];
+  const setup = useChatWorkspaceStore(
+    (state) => state.chats[chatId]?.sceneSetup ?? topicContext.chat.sceneSetup,
+  );
+  const lock = useChatWorkspaceStore((state) => state.chatLocks[chatId]);
+  const startChatLock = useChatWorkspaceStore((state) => state.startChatLock);
+  const setChatLockStatus = useChatWorkspaceStore((state) => state.setChatLockStatus);
+  const markForcedExitClosing = useChatWorkspaceStore((state) => state.markForcedExitClosing);
+  const clearChatLock = useChatWorkspaceStore((state) => state.clearChatLock);
+  const recordDialogueTranscript = useChatWorkspaceStore((state) => state.recordDialogueTranscript);
+  const completeDialogueSummary = useChatWorkspaceStore((state) => state.completeDialogueSummary);
+  const failDialogueSummary = useChatWorkspaceStore((state) => state.failDialogueSummary);
+  const hasDialogueSummary = useChatWorkspaceStore((state) =>
+    Object.values(state.dialogueSummaries).some((summary) => summary.chatId === chatId),
+  );
+  const openTasks = (topicContext.topic.relationshipTasks ?? []).filter(
+    (task) => participant && task.npcId === participant.id && task.status === "open",
+  );
+
+  const finalizeRound = useCallback(
+    async (trigger: "natural_exit" | "forced_exit") => {
+      if (!participant || finalizingRef.current) return;
+      finalizingRef.current = true;
+      setChatLockStatus(chatId, {
+        status: "finalizing",
+        exitInitiator: lock?.exitInitiator,
+        exitReason: lock?.exitReason,
+      });
+      const threadMessages = api.thread().getState().messages ?? runtimeMessages;
+      const visibleTranscript = formatRuntimeMessagesForTranscript(threadMessages);
+      const naturalClosing =
+        trigger === "natural_exit" &&
+        lock?.exitClosing &&
+        !visibleTranscript.includes(lock.exitClosing)
+          ? `DM：${lock.exitClosing}`
+          : "";
+      const transcriptText = [visibleTranscript, naturalClosing].filter(Boolean).join("\n");
+      const messageIds = getRuntimeMessageIds(threadMessages);
+      const transcript = recordDialogueTranscript({
+        topicId: topicContext.topic.id,
+        chatId,
+        npcId: participant.id,
+        npcName: participant.name,
+        trigger,
+        messageIds,
+        transcript: transcriptText || "本轮对话没有可记录的公开消息。",
+      });
+      try {
+        const summary = await requestDialogueSummaries(
+          topicContext,
+          participant,
+          transcript.transcript,
+          trigger,
+        );
+        api.thread().append({
+          role: "assistant",
+          content: [{ type: "text", text: `【DM总结】\n${summary.dmSummary}` }],
+        });
+        completeDialogueSummary({
+          transcriptId: transcript.id,
+          topicId: topicContext.topic.id,
+          chatId,
+          npcId: participant.id,
+          npcName: participant.name,
+          trigger,
+          dmSummary: summary.dmSummary,
+          npcPrivateSummary: summary.npcPrivateSummary,
+          playerImpression: summary.playerImpression,
+          importantPoints: summary.importantPoints,
+        });
+      } catch (error) {
+        failDialogueSummary({
+          transcriptId: transcript.id,
+          topicId: topicContext.topic.id,
+          chatId,
+          npcId: participant.id,
+          npcName: participant.name,
+          trigger,
+          error: error instanceof Error ? error.message : "对话总结生成失败",
+        });
+      } finally {
+        finalizingRef.current = false;
+        naturalExitStartedRef.current = false;
+        forcedExitStartedRef.current = false;
+        clearChatLock(chatId);
+      }
+    },
+    [
+      api,
+      chatId,
+      clearChatLock,
+      completeDialogueSummary,
+      failDialogueSummary,
+      lock?.exitInitiator,
+      lock?.exitReason,
+      participant,
+      recordDialogueTranscript,
+      runtimeMessages,
+      setChatLockStatus,
+      topicContext,
+    ],
+  );
+
+  useEffect(() => {
+    if (
+      !topicContext.topic.roleplay ||
+      !participant ||
+      setup?.status !== "final" ||
+      hasDialogueSummary
+    ) {
+      return;
+    }
+    if (!lock) {
+      startChatLock(chatId, participant.id);
+    }
+  }, [
+    chatId,
+    hasDialogueSummary,
+    lock,
+    participant,
+    setup?.status,
+    startChatLock,
+    topicContext.topic.roleplay,
+  ]);
+
+  useEffect(() => {
+    if (
+      !lock ||
+      lock.status !== "natural_exit_requested" ||
+      isRunning ||
+      naturalExitStartedRef.current
+    ) {
+      return;
+    }
+    naturalExitStartedRef.current = true;
+    api.thread().append({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `【DM】\n${lock.exitClosing || "DM确认双方自然结束这次对话，当前场景收束。"}`,
+        },
+      ],
+    });
+    void finalizeRound("natural_exit");
+  }, [api, finalizeRound, isRunning, lock]);
+
+  useEffect(() => {
+    if (
+      !lock ||
+      lock.status !== "forced_exit_requested" ||
+      isRunning ||
+      forcedExitStartedRef.current ||
+      !participant
+    ) {
+      return;
+    }
+    forcedExitStartedRef.current = true;
+    markForcedExitClosing(chatId);
+    api.thread().append({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: [
+            "【系统隐藏消息：强制离场收场】",
+            lock.exitInitiator === "npc"
+              ? `${participant.name} 在玩家不同意后选择强制离场。请作为 DM 接管离场过程，并让场景自然但带有摩擦地收束。`
+              : `玩家试图在本轮对话未收场前离开。请作为 DM 接管离场过程，并让 ${participant.name} 做出不愉快但符合人设的收场反应。`,
+            `当前场景：${setup?.finalScene || setup?.dmScene || "未记录具体场景。"}`,
+            lock.exitReason ? `离场理由：${lock.exitReason}` : undefined,
+            openTasks.length > 0
+              ? `未完成诉求：${openTasks
+                  .map((task) => `${task.npcName} 需要「${task.request}」`)
+                  .join("；")}`
+              : "当前没有未完成任务，但离场仍显得突兀。",
+            "只输出一段自然的语C收场。不要替玩家继续对话，不要继续推进新任务。",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ],
+      metadata: {
+        custom: {
+          hidden: true,
+          kind: "forced_exit_trigger",
+        },
+      },
+    });
+  }, [api, chatId, isRunning, lock, markForcedExitClosing, openTasks, participant, setup]);
+
+  useAuiEvent("thread.runEnd", () => {
+    const latestLock = useChatWorkspaceStore.getState().chatLocks[chatId];
+    if (latestLock?.status !== "closing") return;
+    void finalizeRound("forced_exit");
+  });
+
   return null;
 }
 
@@ -184,6 +399,106 @@ function RelationshipTools({ topicContext }: { topicContext: TopicContext }) {
             : isRecord(result) && result.exhausted
               ? "三次申请机会已用尽，等待 DM 介入。"
               : "申请已发送到任务面板，等待玩家处理。"}
+        </div>
+      </div>
+    ),
+  });
+
+  useAssistantTool({
+    toolName: "request_leave",
+    type: "frontend",
+    description:
+      "当 NPC 希望结束当前一对一语C对话并自然离场时调用。玩家会看到离场申请，可以同意或不同意。",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: { type: "string" },
+      },
+      required: ["reason"],
+    },
+    disabled: !isDialog || !participant,
+    execute: async (args) => {
+      if (!participant) return { accepted: false, reason: "没有 NPC" };
+      const request = useChatWorkspaceStore.getState().createLeaveRequest(topicContext.chat.id, {
+        initiator: "npc",
+        reason: getToolString(args.reason) || `${participant.name} 想暂时离开当前对话。`,
+      });
+      return {
+        accepted: Boolean(request),
+        requestId: request?.id,
+        instruction: request
+          ? "离场申请已展示给玩家。请等待玩家同意或拒绝，不要自行宣布已经离开。"
+          : "离场申请创建失败。",
+      };
+    },
+    render: ({ args, result, status }) => (
+      <div className="border-border bg-muted/40 my-2 rounded-md border px-3 py-2 text-sm">
+        <div className="font-medium">NPC 请求离场</div>
+        <div className="text-muted-foreground mt-1 text-xs">
+          {status.type === "running"
+            ? "离场申请生成中..."
+            : isRecord(result) && result.accepted
+              ? "申请已发送到场景面板，等待玩家处理。"
+              : getToolString(args.reason) || "NPC 希望结束当前对话。"}
+        </div>
+      </div>
+    ),
+  });
+
+  useAssistantTool({
+    toolName: "force_leave",
+    type: "frontend",
+    description: "仅当 NPC 的离场申请被玩家拒绝后调用。调用后 DM 会接管强制离场流程。",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: { type: "string" },
+      },
+      required: ["reason"],
+    },
+    disabled: !isDialog || !participant,
+    execute: async (args) => {
+      if (!participant) return { accepted: false, reason: "没有 NPC" };
+      const state = useChatWorkspaceStore.getState();
+      const latestRejected = (state.chatLeaveRequests[topicContext.chat.id] ?? [])
+        .filter(
+          (request) =>
+            request.npcId === participant.id &&
+            request.initiator === "npc" &&
+            request.status === "rejected",
+        )
+        .at(-1);
+      if (!latestRejected) {
+        return {
+          accepted: false,
+          reason: "你需要先调用 request_leave，并在玩家拒绝后才能强制离场。",
+        };
+      }
+      state.resolveLeaveRequest(
+        topicContext.chat.id,
+        latestRejected.id,
+        "forced",
+        latestRejected.playerReaction,
+      );
+      state.requestForcedExit(
+        topicContext.chat.id,
+        "npc",
+        getToolString(args.reason) || `${participant.name} 在玩家拒绝后仍坚持离场。`,
+      );
+      return {
+        accepted: true,
+        instruction: "DM 将接管强制离场流程。不要继续推进任务，等待 DM 收场。",
+      };
+    },
+    render: ({ result, status }) => (
+      <div className="border-destructive/30 bg-destructive/5 my-2 rounded-md border px-3 py-2 text-sm">
+        <div className="font-medium">NPC 强制离场</div>
+        <div className="text-muted-foreground mt-1 text-xs">
+          {status.type === "running"
+            ? "正在通知 DM..."
+            : isRecord(result) && result.accepted
+              ? "DM 将接管强制离场流程。"
+              : "强制离场未被接受。"}
         </div>
       </div>
     ),
@@ -290,18 +605,16 @@ function SceneSetupGate({
   const [error, setError] = useState("");
   const [sceneRetry, setSceneRetry] = useState(0);
   const sceneRequestKeyRef = useRef("");
-
   useEffect(() => {
     if (!setup || setup.status !== "pending") return;
     const requestKey = `${topicContext.chat.id}:${setup.npcId}:${setup.taskId ?? "none"}:${sceneRetry}`;
     if (sceneRequestKeyRef.current === requestKey) return;
     sceneRequestKeyRef.current = requestKey;
-    let active = true;
+
     setBusy(true);
     setError("");
     void requestSceneProposal(topicContext, participant, task)
       .then((scene) => {
-        if (!active) return;
         setSceneSetup(topicContext.chat.id, {
           ...setup,
           status: "proposed",
@@ -309,17 +622,12 @@ function SceneSetupGate({
         });
       })
       .catch((sceneError: unknown) => {
-        if (active) {
-          sceneRequestKeyRef.current = "";
-          setError(sceneError instanceof Error ? sceneError.message : "DM 场景生成失败");
-        }
+        sceneRequestKeyRef.current = "";
+        setError(sceneError instanceof Error ? sceneError.message : "DM 场景生成失败");
       })
       .finally(() => {
-        if (active) setBusy(false);
+        setBusy(false);
       });
-    return () => {
-      active = false;
-    };
   }, [participant, sceneRetry, setSceneSetup, setup, task, topicContext]);
 
   if (!setup || setup.status === "final") {
@@ -439,20 +747,30 @@ function NpcFirstMessageStarter({ topicContext }: { topicContext: TopicContext }
       return;
     }
     started.current = true;
+    api.thread().append({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: [
+            "【系统隐藏消息：NPC开场触发】",
+            `DM 场景：${setup.finalScene || setup.dmScene || ""}`,
+            `请作为 ${participant.name} 先开口，像正常语C私聊一样自然发起互动。`,
+            `你的隐藏任务诉求：让玩家同意「${task.request}」`,
+            `利害：${task.stake}`,
+            `推进建议：${task.suggestedApproach}`,
+            "第一句可以铺垫，不必立刻摊牌，但要让玩家感觉你确实有事相求。不要替玩家发言。",
+          ].join("\n"),
+        },
+      ],
+      metadata: {
+        custom: {
+          hidden: true,
+          kind: "npc_opening_trigger",
+        },
+      },
+    });
     setSceneSetup(topicContext.chat.id, { ...setup, npcStarted: true });
-    void requestNpcOpening(topicContext, participant, task, setup.finalScene || setup.dmScene || "")
-      .then((text) => {
-        api.thread().append({
-          role: "assistant",
-          content: [{ type: "text", text }],
-        });
-      })
-      .catch(() => {
-        api.thread().append({
-          role: "assistant",
-          content: [{ type: "text", text: `${participant.name}看向你，像是有话要说。` }],
-        });
-      });
   }, [api, participant, setSceneSetup, setup, task, topicContext.chat.id]);
 
   return null;
@@ -521,6 +839,48 @@ async function requestDmDiceResult(
   return payload.text?.trim() || "DM 没有给出结果。";
 }
 
+async function requestDialogueSummaries(
+  topicContext: TopicContext,
+  participant: NonNullable<TopicContext["chat"]["participants"][number]>,
+  transcript: string,
+  trigger: "natural_exit" | "forced_exit",
+) {
+  const dmSummary = await requestPlainText(
+    "你是中文语C游戏的 DM。你要从第三方视角概述刚结束的一轮玩家-NPC单聊。只输出一段对玩家可见的中文总结。",
+    [
+      `主题：${topicContext.topic.title}`,
+      `玩家角色：${topicContext.topic.roleplay?.playerRole ?? "玩家"}`,
+      `NPC：${participant.name}（${participant.role}）`,
+      `离场方式：${trigger === "forced_exit" ? "强制离场" : "自然离场"}`,
+      `对话记录：\n${transcript}`,
+      "请概述本轮发生了什么、双方关系有什么变化、哪些任务或冲突被推进。不要泄露 NPC 现实身份总结。",
+    ].join("\n\n"),
+  );
+  const privateText = await requestPlainText(
+    [
+      "你是一个语C玩家。现在请以现实世界扮演者身份，而不是游戏内角色身份，复盘刚才和玩家的一轮对话。",
+      "必须返回严格 JSON，不要输出其他文字。",
+    ].join("\n"),
+    [
+      participant.realWorldPersona
+        ? `你的现实扮演者人设：${participant.realWorldPersona}`
+        : "你的现实扮演者人设：普通语C玩家，重视互动质量。",
+      `你在游戏中扮演：${participant.name}（${participant.role}）`,
+      `对话记录：\n${transcript}`,
+      '返回格式：{"npcPrivateSummary":"你对本轮对话的复盘","playerImpression":"你对玩家的印象","importantPoints":["之后互动要记住的点1","点2"]}',
+    ].join("\n\n"),
+  );
+  const parsed = parseJsonObject(privateText);
+  return {
+    dmSummary,
+    npcPrivateSummary: getToolString(parsed.npcPrivateSummary) || privateText,
+    playerImpression: getToolString(parsed.playerImpression),
+    importantPoints: Array.isArray(parsed.importantPoints)
+      ? parsed.importantPoints.map(getToolString).filter(Boolean)
+      : [],
+  };
+}
+
 async function requestSceneProposal(
   topicContext: TopicContext,
   participant: TopicContext["chat"]["participants"][number] | undefined,
@@ -569,36 +929,6 @@ async function requestSceneRevision(
   );
 }
 
-async function requestNpcOpening(
-  topicContext: TopicContext,
-  participant: TopicContext["chat"]["participants"][number],
-  task: NonNullable<TopicContext["topic"]["relationshipTasks"]>[number],
-  scene: string,
-) {
-  return requestPlainText(
-    [
-      `你必须扮演：${participant.name}。`,
-      participant.realWorldPersona ? `现实扮演者人设：${participant.realWorldPersona}` : undefined,
-      `角色定位：${participant.role}`,
-      participant.gamePersona ? `游戏内人设：${participant.gamePersona}` : undefined,
-      participant.faction ? `所属阵营：${participant.faction}` : undefined,
-      `角色提示词：${participant.systemPrompt}`,
-      "你正在进行一对一中文语C私聊。只输出一条自然 IM 消息，不要旁白解释，不要替玩家发言。",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-    [
-      `主题：${topicContext.topic.title}`,
-      `玩家角色：${topicContext.topic.roleplay?.playerRole ?? "玩家"}`,
-      `DM 场景：${scene}`,
-      `你的隐藏任务诉求：让玩家同意「${task.request}」`,
-      `利害：${task.stake}`,
-      `推进建议：${task.suggestedApproach}`,
-      "请你先开口。第一句可以铺垫，不必立刻摊牌，但要让玩家感觉你确实有事相求。",
-    ].join("\n\n"),
-  );
-}
-
 async function requestPlainText(system: string, prompt: string) {
   const response = await fetch("/api/chat", {
     method: "POST",
@@ -614,4 +944,64 @@ async function requestPlainText(system: string, prompt: string) {
   const text = payload.text?.trim();
   if (!text) throw new Error("模型返回为空");
   return text;
+}
+
+function formatRuntimeMessagesForTranscript(messages: readonly unknown[]) {
+  return messages
+    .filter((message) => !isHiddenRuntimeMessage(message))
+    .map((message) => {
+      const record = isRecord(message) ? message : {};
+      const role = getToolString(record.role) || "message";
+      const text = extractRuntimeText(record.content ?? record.parts ?? record);
+      if (!text) return "";
+      return `${formatRoleName(role)}：${text}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function getRuntimeMessageIds(messages: readonly unknown[]) {
+  return messages
+    .map((message) => (isRecord(message) ? getToolString(message.id) : ""))
+    .filter(Boolean);
+}
+
+function isHiddenRuntimeMessage(message: unknown) {
+  if (!isRecord(message)) return false;
+  const metadata = message.metadata;
+  if (!isRecord(metadata)) return false;
+  const custom = metadata.custom;
+  return isRecord(custom) && custom.hidden === true;
+}
+
+function extractRuntimeText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(extractRuntimeText).filter(Boolean).join(" ");
+  if (!isRecord(value)) return "";
+  if (typeof value.text === "string") return value.text;
+  if ("content" in value) return extractRuntimeText(value.content);
+  if ("parts" in value) return extractRuntimeText(value.parts);
+  if ("result" in value) return extractRuntimeText(value.result);
+  return "";
+}
+
+function formatRoleName(role: string) {
+  if (role === "user") return "玩家";
+  if (role === "assistant") return "NPC/DM";
+  if (role === "system") return "系统";
+  return role;
+}
+
+function parseJsonObject(text: string): Record<string, unknown> {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const source = fenced ?? text;
+  const start = source.indexOf("{");
+  const end = source.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return {};
+  try {
+    const parsed = JSON.parse(source.slice(start, end + 1)) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }

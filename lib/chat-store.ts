@@ -5,10 +5,14 @@ import { persist } from "zustand/middleware";
 import {
   DEFAULT_AI_PARTICIPANTS,
   type AiParticipant,
+  type ChatLock,
   type ChatMode,
   type ChatRecruitment,
   type ChatSession,
+  type ChatLeaveRequest,
   type ConsentRequest,
+  type DialogueSummary,
+  type DialogueTranscript,
   type DiceCheck,
   type FactionScoreDelta,
   type FactionScoreEvent,
@@ -41,6 +45,10 @@ type WorkspaceState = {
   npcCreationSessions: Record<string, NpcCreationSession>;
   npcProgressionSessions: Record<string, NpcProgressionSession>;
   messages: Record<string, StoredMessageRow[]>;
+  chatLocks: Record<string, ChatLock>;
+  chatLeaveRequests: Record<string, ChatLeaveRequest[]>;
+  dialogueTranscripts: Record<string, DialogueTranscript>;
+  dialogueSummaries: Record<string, DialogueSummary>;
   activeTopicId: string;
   activeChatId: string;
   createRoleplayTopic: (input: {
@@ -116,6 +124,42 @@ type WorkspaceState = {
   addDiceCheck: (chatId: string, input: Omit<DiceCheck, "id" | "chatId" | "createdAt">) => void;
   incrementToolCallCount: (chatId: string, npcId: string) => number;
   setSceneSetup: (chatId: string, sceneSetup: SceneSetup) => void;
+  startChatLock: (chatId: string, npcId: string) => void;
+  setChatLockStatus: (
+    chatId: string,
+    input: Pick<ChatLock, "status"> &
+      Partial<Pick<ChatLock, "exitInitiator" | "exitReason" | "exitClosing">>,
+  ) => void;
+  requestNaturalExit: (
+    chatId: string,
+    input: Pick<ChatLock, "exitInitiator"> & Partial<Pick<ChatLock, "exitReason" | "exitClosing">>,
+  ) => void;
+  requestForcedExit: (chatId: string, initiator?: "player" | "npc", reason?: string) => void;
+  markForcedExitClosing: (chatId: string) => void;
+  clearChatLock: (chatId: string) => void;
+  createLeaveRequest: (
+    chatId: string,
+    input: Pick<ChatLeaveRequest, "initiator" | "reason"> &
+      Partial<Pick<ChatLeaveRequest, "dmReview">>,
+  ) => ChatLeaveRequest | undefined;
+  resolveLeaveRequest: (
+    chatId: string,
+    requestId: string,
+    status: ChatLeaveRequest["status"],
+    playerReaction?: string,
+  ) => void;
+  recordDialogueTranscript: (
+    input: Omit<DialogueTranscript, "id" | "createdAt">,
+  ) => DialogueTranscript;
+  completeDialogueSummary: (
+    input: Omit<DialogueSummary, "id" | "status" | "createdAt" | "updatedAt">,
+  ) => DialogueSummary;
+  failDialogueSummary: (
+    input: Pick<
+      DialogueSummary,
+      "transcriptId" | "topicId" | "chatId" | "npcId" | "npcName" | "trigger" | "error"
+    >,
+  ) => DialogueSummary;
   applyFactionScoreEvent: (
     chatId: string,
     input: {
@@ -385,6 +429,10 @@ const createInitialState = () => {
     ais: Object.fromEntries(defaultAis.map((ai) => [ai.id, ai])),
     chats: { [chat.id]: chat },
     messages: { [chat.id]: [] },
+    chatLocks: {},
+    chatLeaveRequests: {},
+    dialogueTranscripts: {},
+    dialogueSummaries: {},
     npcCreationSessions: {},
     npcProgressionSessions: {},
     activeTopicId: topicId,
@@ -519,12 +567,26 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           const ais = { ...state.ais };
           const chats = { ...state.chats };
           const messages = { ...state.messages };
+          const chatLocks = { ...state.chatLocks };
+          const chatLeaveRequests = { ...state.chatLeaveRequests };
           delete topics[topicId];
           for (const aiId of topic.aiIds) delete ais[aiId];
           for (const chatId of topic.chatIds) {
             delete chats[chatId];
             delete messages[chatId];
+            delete chatLocks[chatId];
+            delete chatLeaveRequests[chatId];
           }
+          const dialogueTranscripts = Object.fromEntries(
+            Object.entries(state.dialogueTranscripts).filter(
+              ([, transcript]) => transcript.topicId !== topicId,
+            ),
+          );
+          const dialogueSummaries = Object.fromEntries(
+            Object.entries(state.dialogueSummaries).filter(
+              ([, summary]) => summary.topicId !== topicId,
+            ),
+          );
           const npcCreationSessions = Object.fromEntries(
             Object.entries(state.npcCreationSessions).filter(
               ([, session]) => session.topicId !== topicId,
@@ -543,6 +605,10 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             topics,
             ais,
             chats,
+            chatLocks,
+            chatLeaveRequests,
+            dialogueTranscripts,
+            dialogueSummaries,
             npcCreationSessions,
             npcProgressionSessions,
             messages,
@@ -675,8 +741,22 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
 
           const chats = { ...state.chats };
           const messages = { ...state.messages };
+          const chatLocks = { ...state.chatLocks };
+          const chatLeaveRequests = { ...state.chatLeaveRequests };
           delete chats[chatId];
           delete messages[chatId];
+          delete chatLocks[chatId];
+          delete chatLeaveRequests[chatId];
+          const dialogueTranscripts = Object.fromEntries(
+            Object.entries(state.dialogueTranscripts).filter(
+              ([, transcript]) => transcript.chatId !== chatId,
+            ),
+          );
+          const dialogueSummaries = Object.fromEntries(
+            Object.entries(state.dialogueSummaries).filter(
+              ([, summary]) => summary.chatId !== chatId,
+            ),
+          );
 
           const nextChatIds = topic.chatIds.filter((id) => id !== chatId);
           if (nextChatIds.length === 0) {
@@ -698,6 +778,10 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             },
             chats,
             messages,
+            chatLocks,
+            chatLeaveRequests,
+            dialogueTranscripts,
+            dialogueSummaries,
             activeTopicId: topic.id,
             activeChatId: state.activeChatId === chatId ? nextChatIds[0]! : state.activeChatId,
           };
@@ -1234,6 +1318,193 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             },
           };
         });
+      },
+      startChatLock: (chatId, npcId) => {
+        set((state) => {
+          const chat = state.chats[chatId];
+          if (!chat) return state;
+          const existing = state.chatLocks[chatId];
+          if (existing && existing.status !== "active" && existing.status !== "npc_leave_pending") {
+            return state;
+          }
+          const timestamp = now();
+          return {
+            chatLocks: {
+              ...state.chatLocks,
+              [chatId]: existing
+                ? { ...existing, npcId, status: "active", updatedAt: timestamp }
+                : {
+                    chatId,
+                    npcId,
+                    status: "active",
+                    startedAt: timestamp,
+                    updatedAt: timestamp,
+                  },
+            },
+          };
+        });
+      },
+      setChatLockStatus: (chatId, input) => {
+        set((state) => {
+          const chat = state.chats[chatId];
+          if (!chat) return state;
+          const existing = state.chatLocks[chatId];
+          const participant = chat.participants[0];
+          const timestamp = now();
+          return {
+            chatLocks: {
+              ...state.chatLocks,
+              [chatId]: existing
+                ? { ...existing, ...input, updatedAt: timestamp }
+                : {
+                    chatId,
+                    npcId: participant?.id ?? "",
+                    status: input.status,
+                    ...(input.exitInitiator && { exitInitiator: input.exitInitiator }),
+                    ...(input.exitReason && { exitReason: input.exitReason }),
+                    ...(input.exitClosing && { exitClosing: input.exitClosing }),
+                    startedAt: timestamp,
+                    updatedAt: timestamp,
+                  },
+            },
+          };
+        });
+      },
+      requestNaturalExit: (chatId, input) => {
+        get().setChatLockStatus(chatId, {
+          status: "natural_exit_requested",
+          exitInitiator: input.exitInitiator,
+          ...(input.exitReason && { exitReason: input.exitReason }),
+          ...(input.exitClosing && { exitClosing: input.exitClosing }),
+        });
+      },
+      requestForcedExit: (chatId, initiator = "player", reason) => {
+        get().setChatLockStatus(chatId, {
+          status: "forced_exit_requested",
+          exitInitiator: initiator,
+          ...(reason && { exitReason: reason }),
+        });
+      },
+      markForcedExitClosing: (chatId) => {
+        set((state) => {
+          const existing = state.chatLocks[chatId];
+          if (!existing) return state;
+          return {
+            chatLocks: {
+              ...state.chatLocks,
+              [chatId]: { ...existing, status: "closing", updatedAt: now() },
+            },
+          };
+        });
+      },
+      clearChatLock: (chatId) => {
+        set((state) => {
+          if (!state.chatLocks[chatId]) return state;
+          const chatLocks = { ...state.chatLocks };
+          delete chatLocks[chatId];
+          return { chatLocks };
+        });
+      },
+      createLeaveRequest: (chatId, input) => {
+        const chat = get().chats[chatId];
+        if (!chat) return undefined;
+        const participant = chat.participants[0];
+        if (!participant) return undefined;
+        const request: ChatLeaveRequest = {
+          id: makeId("leave"),
+          topicId: chat.topicId,
+          chatId,
+          npcId: participant.id,
+          npcName: participant.name,
+          initiator: input.initiator,
+          status: input.initiator === "npc" ? "pending_player" : "approved",
+          reason: input.reason,
+          ...(input.dmReview && { dmReview: input.dmReview }),
+          createdAt: now(),
+        };
+        set((state) => ({
+          chatLeaveRequests: {
+            ...state.chatLeaveRequests,
+            [chatId]: [...(state.chatLeaveRequests[chatId] ?? []), request],
+          },
+        }));
+        if (input.initiator === "npc") {
+          get().setChatLockStatus(chatId, {
+            status: "npc_leave_pending",
+            exitInitiator: "npc",
+            exitReason: input.reason,
+          });
+        }
+        return request;
+      },
+      resolveLeaveRequest: (chatId, requestId, status, playerReaction) => {
+        set((state) => {
+          const requests = state.chatLeaveRequests[chatId];
+          if (!requests) return state;
+          return {
+            chatLeaveRequests: {
+              ...state.chatLeaveRequests,
+              [chatId]: requests.map((request) =>
+                request.id === requestId
+                  ? {
+                      ...request,
+                      status,
+                      ...(playerReaction && { playerReaction }),
+                      resolvedAt: now(),
+                    }
+                  : request,
+              ),
+            },
+          };
+        });
+      },
+      recordDialogueTranscript: (input) => {
+        const transcript: DialogueTranscript = {
+          id: makeId("transcript"),
+          ...input,
+          createdAt: now(),
+        };
+        set((state) => ({
+          dialogueTranscripts: {
+            ...state.dialogueTranscripts,
+            [transcript.id]: transcript,
+          },
+        }));
+        return transcript;
+      },
+      completeDialogueSummary: (input) => {
+        const timestamp = now();
+        const summary: DialogueSummary = {
+          id: makeId("summary"),
+          ...input,
+          status: "completed",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        set((state) => ({
+          dialogueSummaries: {
+            ...state.dialogueSummaries,
+            [summary.id]: summary,
+          },
+        }));
+        return summary;
+      },
+      failDialogueSummary: (input) => {
+        const timestamp = now();
+        const summary: DialogueSummary = {
+          id: makeId("summary"),
+          ...input,
+          status: "failed",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        set((state) => ({
+          dialogueSummaries: {
+            ...state.dialogueSummaries,
+            [summary.id]: summary,
+          },
+        }));
+        return summary;
       },
       applyFactionScoreEvent: (chatId, input) => {
         set((state) => {
