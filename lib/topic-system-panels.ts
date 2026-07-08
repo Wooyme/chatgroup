@@ -1,4 +1,4 @@
-export type TopicSystemPanel = "welcome" | "topic-creation" | "recruitment";
+export type TopicSystemPanel = "welcome" | "topic-creation" | "recruitment" | "context-pipeline";
 
 const PREFIX = "system:";
 
@@ -14,7 +14,12 @@ export const parseTopicSystemPanelId = (
   if (separatorIndex === -1) return undefined;
   const topicId = value.slice(0, separatorIndex);
   const panel = value.slice(separatorIndex + 1);
-  if (panel !== "welcome" && panel !== "topic-creation" && panel !== "recruitment") {
+  if (
+    panel !== "welcome" &&
+    panel !== "topic-creation" &&
+    panel !== "recruitment" &&
+    panel !== "context-pipeline"
+  ) {
     return undefined;
   }
   return { topicId, panel };

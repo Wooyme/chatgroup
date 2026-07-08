@@ -3,6 +3,7 @@
 import type * as React from "react";
 import {
   BotIcon,
+  BracesIcon,
   ClipboardListIcon,
   HomeIcon,
   MessageSquareIcon,
@@ -136,6 +137,9 @@ export function TopicWorkspaceSidebar({
     : "";
   const recruitmentPanelId = activeTopic
     ? getTopicSystemPanelId(activeTopic.id, "recruitment")
+    : "";
+  const contextPipelinePanelId = activeTopic
+    ? getTopicSystemPanelId(activeTopic.id, "context-pipeline")
     : "";
 
   const editTopic = async (topicId: string, currentTitle: string) => {
@@ -461,6 +465,23 @@ export function TopicWorkspaceSidebar({
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   ) : null}
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={activeChatId === contextPipelinePanelId}
+                      onClick={() =>
+                        void guardAction(() =>
+                          setActiveTopicPanel(activeTopic.id, "context-pipeline"),
+                        )
+                      }
+                      tooltip="Context Pipeline"
+                    >
+                      <BracesIcon />
+                      <span>Context Pipeline</span>
+                      <span className="bg-muted text-muted-foreground ms-auto rounded px-1.5 py-0.5 text-[10px] font-medium">
+                        固定
+                      </span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                   {activeTopic.recruitment ? (
                     <SidebarMenuItem>
                       <SidebarMenuButton

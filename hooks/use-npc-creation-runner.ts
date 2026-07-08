@@ -2,6 +2,9 @@
 
 import { useEffect, useRef } from "react";
 import { useChatWorkspaceStore } from "@/lib/chat-store";
+import { ensureContextPipeline } from "@/lib/context-pipeline-defaults";
+import { buildNpcCreationPipelineVariables } from "@/lib/context-pipeline-runtime";
+import type { ContextPipelineTarget } from "@/lib/context-pipeline";
 import type {
   AiParticipant,
   CharacterAttribute,
@@ -42,14 +45,34 @@ export function useNpcCreationRunner(npcCreationSessions: Record<string, NpcCrea
   }, [npcCreationSessions]);
 }
 
-async function requestText(system: string, prompt: string) {
+async function requestText({
+  target,
+  topic,
+  chat,
+  session,
+  cycle,
+}: {
+  target: ContextPipelineTarget;
+  topic: Topic;
+  chat: ChatSession;
+  session: NpcCreationSession;
+  cycle: number;
+}) {
+  const state = useChatWorkspaceStore.getState();
   const response = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       responseMode: "text",
-      system,
-      prompt,
+      contextPipeline: ensureContextPipeline(topic.contextPipeline),
+      pipelineTarget: target,
+      pipelineVariables: buildNpcCreationPipelineVariables({
+        topic,
+        chat,
+        session,
+        cycle,
+        npcCreationSessions: state.npcCreationSessions,
+      }),
     }),
   });
 
@@ -82,15 +105,13 @@ async function runNpcCreationSession(sessionId: string) {
       const latest = getNpcCreationContext(sessionId);
       if (!latest) return;
       if (latest.session.messages.at(-1)?.role !== "dm") {
-        const dmMessage = await requestText(
-          buildDmSystemPrompt(latest.topic),
-          buildDmTurnPrompt(
-            latest.topic,
-            latest.chat,
-            latest.session,
-            getNpcDialogMessageCount(sessionId),
-          ),
-        );
+        const dmMessage = await requestText({
+          target: "npc-creation.dm-turn",
+          topic: latest.topic,
+          chat: latest.chat,
+          session: latest.session,
+          cycle: getNpcDialogMessageCount(sessionId),
+        });
         useChatWorkspaceStore.getState().appendNpcCreationMessage(sessionId, {
           role: "dm",
           name: "主持人",
@@ -102,10 +123,13 @@ async function runNpcCreationSession(sessionId: string) {
 
       const afterDm = getNpcCreationContext(sessionId);
       if (!afterDm) return;
-      const npcMessage = await requestText(
-        buildNpcSystemPrompt(afterDm.session),
-        buildNpcTurnPrompt(afterDm.topic, afterDm.chat, afterDm.session),
-      );
+      const npcMessage = await requestText({
+        target: "npc-creation.npc-turn",
+        topic: afterDm.topic,
+        chat: afterDm.chat,
+        session: afterDm.session,
+        cycle: getNpcDialogMessageCount(sessionId),
+      });
       useChatWorkspaceStore.getState().appendNpcCreationMessage(sessionId, {
         role: "npc",
         name: `候选玩家 ${afterDm.session.index + 1}`,
@@ -116,10 +140,13 @@ async function runNpcCreationSession(sessionId: string) {
     for (;;) {
       const latest = getNpcCreationContext(sessionId);
       if (!latest) return;
-      const finalText = await requestText(
-        buildDmSystemPrompt(latest.topic),
-        buildFinalPrompt(latest.topic, latest.chat, latest.session),
-      );
+      const finalText = await requestText({
+        target: "npc-creation.final",
+        topic: latest.topic,
+        chat: latest.chat,
+        session: latest.session,
+        cycle: getNpcDialogMessageCount(sessionId),
+      });
       const result = normalizeNpcFinalResult(finalText, latest.topic, latest.session);
       const conflict = detectNpcConflict(result, latest.chat, latest.session);
       if (conflict && latest.session.revisionCount < 2) {
@@ -187,46 +214,6 @@ function getNpcDialogMessageCount(sessionId: string) {
   );
 }
 
-function buildRoleplaySummary(topic: Topic) {
-  const roleplay = topic.roleplay;
-  if (!roleplay) return topic.description;
-  return [
-    `主题：${topic.title}`,
-    `世界观：${roleplay.worldView}`,
-    `阵营模板：${roleplay.factionSystem.template}`,
-    `玩家阵营：${roleplay.playerFaction}`,
-    "阵营列表：",
-    ...roleplay.factionSystem.factions.map(
-      (faction) =>
-        `- ${faction.name}：${faction.description}；强度${faction.strength}；分数${faction.currentScore}/${faction.victoryScore}；胜利条件：${faction.victoryCondition}；叙事影响力：${faction.narrativeInfluence}`,
-    ),
-    "属性模板：",
-    ...roleplay.attributeSystem.attributes.map(
-      (attribute) =>
-        `- id=${attribute.id} ${attribute.name}：默认${attribute.defaultValue}；${attribute.description}`,
-    ),
-    `玩家角色：${roleplay.playerRole}`,
-    `玩家风评：${roleplay.reputation}`,
-    `补充设定：${roleplay.notes || "无"}`,
-  ].join("\n");
-}
-
-function formatNpcCreationHistory(session: NpcCreationSession) {
-  return session.messages.map((message) => `${message.name}：${message.content}`).join("\n");
-}
-
-function formatOccupiedRoles(chat: ChatSession) {
-  if (chat.participants.length === 0) return "暂无。";
-  return chat.participants
-    .map(
-      (participant) =>
-        `- ${participant.name}：${participant.role}${
-          participant.faction ? `；阵营：${participant.faction}` : ""
-        }`,
-    )
-    .join("\n");
-}
-
 async function requestNpcRevision(sessionId: string, conflict: string) {
   const latest = getNpcCreationContext(sessionId);
   if (!latest) return;
@@ -243,10 +230,13 @@ async function requestNpcRevision(sessionId: string, conflict: string) {
 
   const afterDm = getNpcCreationContext(sessionId);
   if (!afterDm) return;
-  const npcMessage = await requestText(
-    buildNpcSystemPrompt(afterDm.session),
-    buildNpcTurnPrompt(afterDm.topic, afterDm.chat, afterDm.session),
-  );
+  const npcMessage = await requestText({
+    target: "npc-creation.npc-turn",
+    topic: afterDm.topic,
+    chat: afterDm.chat,
+    session: afterDm.session,
+    cycle: getNpcDialogMessageCount(sessionId),
+  });
   useChatWorkspaceStore.getState().appendNpcCreationMessage(sessionId, {
     role: "npc",
     name: `候选玩家 ${afterDm.session.index + 1}`,
@@ -313,104 +303,6 @@ function roleSimilarity(left: string, right: string) {
 function makeBigrams(value: string) {
   if (value.length <= 2) return value ? [value] : [];
   return Array.from({ length: value.length - 1 }, (_, index) => value.slice(index, index + 2));
-}
-
-function formatInFlightSessions(session: NpcCreationSession) {
-  const state = useChatWorkspaceStore.getState();
-  return Object.values(state.npcCreationSessions)
-    .filter((item) => item.topicId === session.topicId && item.id !== session.id)
-    .map(
-      (item) =>
-        `- 候选玩家${item.index + 1}：状态=${item.status}；推荐阵营=${
-          item.targetFaction || "无"
-        }；生态位=${item.roleNiche || "无"}；关键词=${item.reservedKeywords.join("、")}`,
-    )
-    .join("\n");
-}
-
-function buildDmSystemPrompt(topic: Topic) {
-  return [
-    "你是中文语C主题的主持人/DM，正在帮新成员创建游戏角色。",
-    "你说话像 IM，短、具体、自然，不写长篇说明。",
-    "你必须围绕主题世界观和玩家角色进行把关。",
-    "你可以要求更多细节，可以指出世界观冲突，也可以指出角色离玩家太远、不方便互动。",
-    "你必须让候选玩家最终选择一个现有阵营，不能自创阵营。",
-    "你不能直接指定候选玩家扮演某个具体角色；你只能给约束、指出冲突、要求候选玩家自己修正。",
-    "不要说自己是 AI。",
-    "主题设定：",
-    buildRoleplaySummary(topic),
-  ].join("\n");
-}
-
-function buildNpcSystemPrompt(session: NpcCreationSession) {
-  return [
-    `你是一个准备加入中文语C主题的普通玩家。你的现实人设：${session.personaTemplate}`,
-    "你不是最终游戏角色本人，而是在和主持人商量自己要扮演什么角色。",
-    "你说话像 IM，不写小说正文，不要说自己是 AI。",
-    "你要认真配合主持人的要求，选择一个符合世界观、方便和玩家互动、能长期参与的角色。",
-    session.targetFaction
-      ? `系统给你的推荐阵营倾向是「${session.targetFaction}」，这不是强制，但优先考虑。`
-      : undefined,
-    session.roleNiche ? `系统给你的推荐角色生态位是「${session.roleNiche}」。` : undefined,
-    session.reservedKeywords.length > 0
-      ? `尽量围绕这些差异化关键词构思，但不要机械照抄：${session.reservedKeywords.join("、")}`
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function buildDmTurnPrompt(
-  topic: Topic,
-  chat: ChatSession,
-  session: NpcCreationSession,
-  cycle: number,
-) {
-  const firstTurn = cycle === 0;
-  return [
-    `候选玩家现实人设：${session.personaTemplate}`,
-    `推荐阵营倾向：${session.targetFaction || "无"}`,
-    `推荐角色生态位：${session.roleNiche || "无"}`,
-    `差异化关键词：${session.reservedKeywords.join("、") || "无"}`,
-    `已占用角色：\n${formatOccupiedRoles(chat)}`,
-    `其他并行创建中的候选：\n${formatInFlightSessions(session) || "暂无。"}`,
-    `创建对话记录：\n${formatNpcCreationHistory(session) || "暂无。"}`,
-    firstTurn
-      ? "请作为主持人欢迎这个新成员，向他介绍本主题正在进行的世界观，并请他先提出想扮演的角色。"
-      : "请继续主持创建流程。根据对话提出一个关键追问、修正或确认。若角色离玩家太远、不方便互动，要直接指出。",
-    "只输出一条 IM 消息，不要输出 JSON。",
-    `玩家角色提醒：${topic.roleplay?.playerRole ?? "玩家角色未设定"}`,
-  ].join("\n\n");
-}
-
-function buildNpcTurnPrompt(topic: Topic, chat: ChatSession, session: NpcCreationSession) {
-  return [
-    `群设定：\n${buildRoleplaySummary(topic)}`,
-    `推荐阵营倾向：${session.targetFaction || "无"}`,
-    `推荐角色生态位：${session.roleNiche || "无"}`,
-    `差异化关键词：${session.reservedKeywords.join("、") || "无"}`,
-    `已占用角色：\n${formatOccupiedRoles(chat)}`,
-    `其他并行创建中的候选：\n${formatInFlightSessions(session) || "暂无。"}`,
-    `创建对话记录：\n${formatNpcCreationHistory(session)}`,
-    "请以候选玩家身份回复主持人的最后一条消息。你可以提出想扮演的角色、补充细节、接受修改或解释自己为什么适合这个主题。",
-    "只输出一条 IM 消息，不要输出旁白。",
-  ].join("\n\n");
-}
-
-function buildFinalPrompt(topic: Topic, chat: ChatSession, session: NpcCreationSession) {
-  return [
-    "请作为主持人总结这个候选玩家最终加入主题的角色。",
-    `群设定：\n${buildRoleplaySummary(topic)}`,
-    `推荐阵营倾向：${session.targetFaction || "无"}`,
-    `推荐角色生态位：${session.roleNiche || "无"}`,
-    `差异化关键词：${session.reservedKeywords.join("、") || "无"}`,
-    `已占用角色：\n${formatOccupiedRoles(chat)}`,
-    `其他并行创建中的候选：\n${formatInFlightSessions(session) || "暂无。"}`,
-    `创建对话记录：\n${formatNpcCreationHistory(session)}`,
-    "必须返回严格 JSON，不要 Markdown，不要解释。",
-    "JSON 字段：",
-    '{"name":"角色在主题中的称呼，2到6个中文字符","role":"一句话角色身份","faction":"必须是现有阵营名之一","gamePersona":"这个 NPC 在语C游戏中的完整人设，包含身份、目标、关系位置和长期动机","attributes":[{"id":"必须使用属性模板中的 id","value":数字}],"systemPrompt":"给单聊模型使用的人设提示词，必须同时保存现实扮演者人设和游戏角色人设，持续体现阵营利益、盟友/敌对关系和胜利目标","introMessage":"加入主题后的第一句 IM 式招呼","creationSummary":"主持人对角色适配性和阵营归属的简短总结"}',
-  ].join("\n\n");
 }
 
 function normalizeNpcFinalResult(

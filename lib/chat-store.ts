@@ -10,7 +10,6 @@ import {
   type ChatRecruitment,
   type ChatSession,
   type ChatLeaveRequest,
-  type ConsentRequest,
   type DialogueSummary,
   type DialogueTranscript,
   type DiceCheck,
@@ -31,6 +30,8 @@ import {
   type TaskKeyNodeRequest,
   type Topic,
 } from "@/lib/chat-types";
+import { createDefaultContextPipeline } from "@/lib/context-pipeline-defaults";
+import type { ContextPipeline } from "@/lib/context-pipeline";
 import { createCharacterAttributes } from "@/lib/attribute-templates";
 import {
   DEFAULT_AI_PROVIDER,
@@ -59,7 +60,6 @@ type WorkspaceState = {
     groupTitle: string;
     personaTemplates: string[];
   }) => { topicId: string; chatId: string; sessionIds: string[] };
-  createTopic: (title?: string) => string;
   renameTopic: (topicId: string, title: string) => void;
   deleteTopic: (topicId: string) => void;
   createAi: (topicId: string, input?: AiParticipantInput) => string;
@@ -73,7 +73,6 @@ type WorkspaceState = {
   ) => string;
   renameChat: (chatId: string, title: string) => void;
   deleteChat: (chatId: string) => void;
-  createAiAndJoinChat: (topicId: string, chatId: string, input: AiParticipantInput) => string;
   appendRecruitmentEvent: (
     topicId: string,
     event: Pick<RecruitmentEvent, "message" | "status" | "sessionId">,
@@ -103,19 +102,6 @@ type WorkspaceState = {
     focusNpcId?: string,
     reason?: string,
   ) => string;
-  addConsentRequest: (
-    chatId: string,
-    input: Pick<
-      ConsentRequest,
-      "taskId" | "npcId" | "npcName" | "requestTitle" | "requestBody" | "npcReactionHint"
-    >,
-  ) => ConsentRequest | undefined;
-  resolveConsentRequest: (
-    chatId: string,
-    requestId: string,
-    approved: boolean,
-    playerReaction: string,
-  ) => void;
   createTaskKeyNodeRequest: (
     chatId: string,
     input: Pick<
@@ -183,6 +169,8 @@ type WorkspaceState = {
       winningFactionId?: string;
     },
   ) => void;
+  updateTopicContextPipeline: (topicId: string, pipeline: ContextPipeline) => void;
+  resetTopicContextPipeline: (topicId: string) => void;
   setActiveTopic: (topicId: string) => void;
   setActiveTopicPanel: (topicId: string, panel: TopicSystemPanel) => void;
   setActiveChat: (chatId: string) => void;
@@ -453,6 +441,7 @@ const createInitialState = () => {
         id: topicId,
         title: "默认主题",
         description: "用于临时讨论和日常问答。",
+        contextPipeline: createDefaultContextPipeline(),
         aiIds: defaultAis.map((ai) => ai.id),
         chatIds: [chat.id],
         createdAt: timestamp,
@@ -527,6 +516,7 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
               title: title.trim() || "新主题",
               description,
               roleplay,
+              contextPipeline: createDefaultContextPipeline(),
               recruitment,
               aiIds: [],
               chatIds: [],
@@ -548,36 +538,6 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
         }));
 
         return { topicId, chatId: "", sessionIds: sessions.map((session) => session.id) };
-      },
-      createTopic: (title) => {
-        const timestamp = now();
-        const topicId = makeId("topic");
-        const defaultAis = cloneDefaultAis();
-        const chat = createChatSession(topicId, "dialog", [defaultAis[0]!], "AI 对话");
-        set((state) => ({
-          topics: {
-            ...state.topics,
-            [topicId]: {
-              id: topicId,
-              title: title?.trim() || "新主题",
-              description: "",
-              roleplay: undefined,
-              aiIds: defaultAis.map((ai) => ai.id),
-              chatIds: [chat.id],
-              createdAt: timestamp,
-              updatedAt: timestamp,
-            },
-          },
-          ais: {
-            ...state.ais,
-            ...Object.fromEntries(defaultAis.map((ai) => [ai.id, ai])),
-          },
-          chats: { ...state.chats, [chat.id]: chat },
-          messages: { ...state.messages, [chat.id]: [] },
-          activeTopicId: topicId,
-          activeChatId: getTopicSystemPanelId(topicId, "welcome"),
-        }));
-        return topicId;
       },
       renameTopic: (topicId, title) => {
         const nextTitle = title.trim();
@@ -820,33 +780,6 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
             activeChatId: state.activeChatId === chatId ? nextChatIds[0]! : state.activeChatId,
           };
         });
-      },
-      createAiAndJoinChat: (topicId, chatId, input) => {
-        const state = get();
-        const topic = state.topics[topicId];
-        const chat = state.chats[chatId];
-        if (!topic || !chat) return "";
-        const ai = createAiParticipant(input, topic.aiIds.length);
-        set((current) => ({
-          ais: { ...current.ais, [ai.id]: ai },
-          topics: {
-            ...current.topics,
-            [topicId]: {
-              ...topic,
-              aiIds: [...topic.aiIds, ai.id],
-              updatedAt: now(),
-            },
-          },
-          chats: {
-            ...current.chats,
-            [chatId]: {
-              ...chat,
-              participants: [...chat.participants, ai],
-              updatedAt: now(),
-            },
-          },
-        }));
-        return ai.id;
       },
       appendRecruitmentEvent: (chatId, event) => {
         set((state) => {
@@ -1176,90 +1109,6 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           };
         });
         return session.id;
-      },
-      addConsentRequest: (chatId, input) => {
-        const topicId = get().chats[chatId]?.topicId;
-        if (!topicId) return undefined;
-        const request: ConsentRequest = {
-          id: makeId("consent"),
-          chatId,
-          taskId: input.taskId,
-          npcId: input.npcId,
-          npcName: input.npcName,
-          requestTitle: input.requestTitle,
-          requestBody: input.requestBody,
-          npcReactionHint: input.npcReactionHint,
-          status: "pending",
-          createdAt: now(),
-        };
-        set((state) => {
-          const topic = state.topics[topicId];
-          if (!topic) return state;
-          return {
-            topics: {
-              ...state.topics,
-              [topicId]: {
-                ...topic,
-                consentRequests: [...(topic.consentRequests ?? []), request],
-                updatedAt: now(),
-              },
-            },
-          };
-        });
-        return request;
-      },
-      resolveConsentRequest: (chatId, requestId, approved, playerReaction) => {
-        const topicId = get().chats[chatId]?.topicId;
-        if (!topicId) return;
-        set((state) => {
-          const topic = state.topics[topicId];
-          if (!topic) return state;
-          const request = (topic.consentRequests ?? []).find((item) => item.id === requestId);
-          if (!request || request.status !== "pending") return state;
-          const taskStatus: RelationshipTaskStatus = approved ? "completed" : "failed";
-          return {
-            topics: {
-              ...state.topics,
-              [topicId]: {
-                ...topic,
-                consentRequests: (topic.consentRequests ?? []).map((item) =>
-                  item.id === requestId
-                    ? {
-                        ...item,
-                        status: approved ? "approved" : "rejected",
-                        playerReaction,
-                        resolvedAt: now(),
-                      }
-                    : item,
-                ),
-                relationshipTasks: (topic.relationshipTasks ?? []).map((task) =>
-                  task.id === request.taskId
-                    ? {
-                        ...task,
-                        status: taskStatus,
-                        resolution: approved
-                          ? `玩家同意：${playerReaction}`
-                          : `玩家驳回：${playerReaction}`,
-                        resolvedAt: now(),
-                      }
-                    : task,
-                ),
-                updatedAt: now(),
-              },
-            },
-          };
-        });
-        const request = get().topics[topicId]?.consentRequests?.find(
-          (item) => item.id === requestId,
-        );
-        if (request) {
-          get().ensureTaskAssignmentSession(
-            topicId,
-            "replacement_task",
-            request.npcId,
-            approved ? "上一条 NPC 请求已获得玩家同意。" : "上一条 NPC 请求被玩家驳回。",
-          );
-        }
       },
       createTaskKeyNodeRequest: (chatId, input) => {
         const topicId = get().chats[chatId]?.topicId;
@@ -1676,6 +1525,38 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
           };
         });
       },
+      updateTopicContextPipeline: (topicId, pipeline) => {
+        set((state) => {
+          const topic = state.topics[topicId];
+          if (!topic) return state;
+          return {
+            topics: {
+              ...state.topics,
+              [topicId]: {
+                ...topic,
+                contextPipeline: { ...pipeline, updatedAt: now() },
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
+      resetTopicContextPipeline: (topicId) => {
+        set((state) => {
+          const topic = state.topics[topicId];
+          if (!topic) return state;
+          return {
+            topics: {
+              ...state.topics,
+              [topicId]: {
+                ...topic,
+                contextPipeline: createDefaultContextPipeline(),
+                updatedAt: now(),
+              },
+            },
+          };
+        });
+      },
       setActiveTopic: (topicId) => {
         const { topics } = get();
         if (!topics[topicId]) return;
@@ -1799,10 +1680,3 @@ export const useChatWorkspaceStore = create<WorkspaceState>()(
     },
   ),
 );
-
-export const getActiveWorkspace = () => {
-  const state = useChatWorkspaceStore.getState();
-  const topic = state.topics[state.activeTopicId];
-  const chat = state.chats[state.activeChatId];
-  return { state, topic, chat };
-};

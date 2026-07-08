@@ -38,9 +38,11 @@ export const Assistant = () => {
         ? "主题创建助手"
         : systemPanel?.panel === "recruitment"
           ? "DM 招募群成员"
-          : chat
-            ? `${chat.title} · ${chat.participants.map((ai) => ai.name).join("、")}`
-            : "会话";
+          : systemPanel?.panel === "context-pipeline"
+            ? "Context Pipeline"
+            : chat
+              ? `${chat.title} · ${chat.participants.map((ai) => ai.name).join("、")}`
+              : "会话";
 
   useNpcCreationRunner(npcCreationSessions);
   useNpcProgressionRunner(npcProgressionSessions);

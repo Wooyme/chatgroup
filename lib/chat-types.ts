@@ -4,6 +4,7 @@ import {
   DEFAULT_OPENROUTER_MODEL_NAME,
   type AiProvider,
 } from "@/lib/ai-providers";
+import type { ContextPipeline } from "@/lib/context-pipeline";
 
 export type ChatMode = "dialog";
 
@@ -287,6 +288,7 @@ export type Topic = {
   title: string;
   description: string;
   roleplay?: RoleplayTopicProfile;
+  contextPipeline?: ContextPipeline;
   aiIds: string[];
   chatIds: string[];
   recruitment?: ChatRecruitment;
@@ -393,6 +395,7 @@ export type TopicContext = {
     | "title"
     | "description"
     | "roleplay"
+    | "contextPipeline"
     | "relationshipTasks"
     | "taskKeyNodeRequests"
     | "consentRequests"

@@ -1,6 +1,7 @@
 "use client";
 
 import { ChatRuntime } from "@/components/chat-runtime";
+import { ContextPipelineManager } from "@/components/context-pipeline-manager";
 import { NpcRecruitmentWorkspace } from "@/components/npc-recruitment-workspace";
 import { NpcStatusPanel } from "@/components/npc-status-panel";
 import { ThemeCreationAssistant } from "@/components/theme-creation-assistant";
@@ -58,6 +59,10 @@ export function WorkspaceMain({
 
   if (topic && systemPanel?.topicId === topic.id && systemPanel.panel === "topic-creation") {
     return <TopicCreationSummaryPage topic={topic} />;
+  }
+
+  if (topic && systemPanel?.topicId === topic.id && systemPanel.panel === "context-pipeline") {
+    return <ContextPipelineManager topic={topic} confirmReset={modal.confirm} />;
   }
 
   if (
@@ -130,6 +135,7 @@ function TopicChatRuntime({
               title: topic.title,
               description: topic.description,
               roleplay: topic.roleplay,
+              contextPipeline: topic.contextPipeline,
               relationshipTasks: topic.relationshipTasks,
               taskKeyNodeRequests: topic.taskKeyNodeRequests,
               consentRequests: topic.consentRequests,
